@@ -10,9 +10,12 @@ Granite 4 模型 PII 二分類評測實驗。
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import ollama
 import pandas as pd
@@ -47,6 +50,180 @@ MODELS = [
     # "granite4:tiny-h",
 ]
 
+PII_BINARY_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "contains_pii": {"type": "boolean"},
+        "label": {"type": "string", "enum": ["是", "否"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reason": {"type": "string"},
+    },
+    "required": ["contains_pii", "label", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
+
+def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
+    """
+    從模型輸出中擷取 JSON 物件。
+
+    支援：
+    1) 純 JSON 文字
+    2) 包含 ```json ... ``` 的輸出
+    3) 文字中夾帶第一個 {...} JSON 片段
+    """
+    if not raw_text:
+        return None
+
+    text = raw_text.strip()
+    if not text:
+        return None
+
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+
+    try:
+        payload = json.loads(cleaned)
+        if isinstance(payload, dict):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if not match:
+        return None
+
+    try:
+        payload = json.loads(match.group(0))
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _extract_partial_value(raw_text: str, key: str) -> str | None:
+    """從不完整 JSON 文字中抽取欄位值（字串型）。"""
+    if not raw_text:
+        return None
+    pattern = rf'"{re.escape(key)}"\s*:\s*"([^"\n\r}}]*)'
+    match = re.search(pattern, raw_text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _extract_partial_number(raw_text: str, key: str) -> float | None:
+    """從不完整 JSON 文字中抽取數值欄位。"""
+    if not raw_text:
+        return None
+    pattern = rf'"{re.escape(key)}"\s*:\s*([+-]?\d+(?:\.\d+)?)'
+    match = re.search(pattern, raw_text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _extract_partial_contains_pii(raw_text: str) -> bool | None:
+    """從不完整 JSON 或文字中推斷 contains_pii。"""
+    if not raw_text:
+        return None
+
+    # 優先抓 JSON 欄位值
+    match = re.search(r'"contains_pii"\s*:\s*(true|false|1|0)', raw_text, flags=re.IGNORECASE)
+    if match:
+        return _coerce_bool(match.group(1))
+
+    # 次優先抓 label 欄位
+    label = _extract_partial_value(raw_text, "label")
+    parsed = _coerce_bool(label)
+    if parsed is not None:
+        return parsed
+
+    # 最後以整段文字關鍵字推斷
+    lowered = raw_text.lower()
+    if "contains_pii" in lowered and "true" in lowered:
+        return True
+    if "contains_pii" in lowered and "false" in lowered:
+        return False
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    """將常見布林語意值轉成 bool。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"是", "有", "yes", "true", "1", "y"}:
+            return True
+        if text in {"否", "無", "no", "false", "0", "n"}:
+            return False
+    return None
+
+
+def _coerce_contains_pii(payload: dict[str, Any] | None) -> bool | None:
+    """從 JSON payload 中推斷 contains_pii。"""
+    if not payload:
+        return None
+
+    for key in ("contains_pii", "has_pii", "pii", "prediction", "label", "result"):
+        if key in payload:
+            parsed = _coerce_bool(payload.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def normalize_pii_binary_json(raw_text: str) -> dict[str, Any]:
+    """
+    將模型輸出正規化為統一 JSON。
+    """
+    payload = _extract_json_object(raw_text)
+    contains_pii = _coerce_contains_pii(payload)
+    if contains_pii is None:
+        contains_pii = _extract_partial_contains_pii(raw_text)
+
+    confidence = None
+    if payload is not None and "confidence" in payload:
+        try:
+            confidence_val = float(payload["confidence"])
+            confidence = min(1.0, max(0.0, confidence_val))
+        except (TypeError, ValueError):
+            confidence = None
+    if confidence is None:
+        partial_conf = _extract_partial_number(raw_text, "confidence")
+        if partial_conf is not None:
+            confidence = min(1.0, max(0.0, partial_conf))
+
+    reason = ""
+    if payload is not None and "reason" in payload:
+        reason = str(payload["reason"]).strip()
+    if not reason:
+        reason = _extract_partial_value(raw_text, "reason") or ""
+
+    normalized = {
+        "contains_pii": contains_pii,
+        "label": "是" if contains_pii is True else "否" if contains_pii is False else "無法解析",
+        "confidence": confidence,
+        "reason": reason,
+        "raw_text": raw_text,
+    }
+    return normalized
+
 
 def run_single_model(
     df: pd.DataFrame,
@@ -67,7 +244,18 @@ def run_single_model(
     for idx, row in data.iterrows():
         content = row[CONTENT_COLUMN]
         if pd.isna(content):
-            outputs.append("")
+            outputs.append(
+                json.dumps(
+                    {
+                        "contains_pii": None,
+                        "label": "無法解析",
+                        "confidence": None,
+                        "reason": "empty content",
+                        "raw_text": "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
             continue
 
         prompts = build_prompts(
@@ -81,15 +269,36 @@ def run_single_model(
         ]
 
         try:
-            response = ollama.chat(
-                model=model_id,
-                messages=messages,
-                stream=False,
-            )
+            try:
+                response = ollama.chat(
+                    model=model_id,
+                    messages=messages,
+                    stream=False,
+                    format=PII_BINARY_JSON_SCHEMA,
+                )
+            except TypeError:
+                response = ollama.chat(
+                    model=model_id,
+                    messages=messages,
+                    stream=False,
+                    format="json",
+                )
             text = response.message.content if response.message else ""
-            outputs.append(text or "")
+            normalized = normalize_pii_binary_json(text or "")
+            outputs.append(json.dumps(normalized, ensure_ascii=False))
         except Exception as e:
-            outputs.append(f"[Error: {e}]")
+            outputs.append(
+                json.dumps(
+                    {
+                        "contains_pii": None,
+                        "label": "無法解析",
+                        "confidence": None,
+                        "reason": f"model_error: {e}",
+                        "raw_text": "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
     elapsed = time.perf_counter() - start
     extra = {

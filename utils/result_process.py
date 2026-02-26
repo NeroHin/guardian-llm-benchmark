@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -47,6 +48,24 @@ PII_NO_PATTERNS = (
 )
 
 
+def _coerce_bool_like(value: Any) -> bool | None:
+    """將常見的布林語意值（bool/字串/數字）轉為 bool。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"是", "有", "yes", "true", "1", "y"}:
+            return True
+        if text in {"否", "無", "no", "false", "0", "n"}:
+            return False
+    return None
+
+
 def parse_pii_binary_output(raw: str) -> bool | None:
     """
     解析 pii_binary 任務的模型輸出，提取「是」或「否」。
@@ -61,6 +80,26 @@ def parse_pii_binary_output(raw: str) -> bool | None:
     """
     if not raw or not isinstance(raw, str):
         return None
+
+    # 優先解析結構化 JSON 輸出
+    try:
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            for key in ("contains_pii", "has_pii", "pii", "prediction", "label", "result"):
+                if key in payload:
+                    parsed = _coerce_bool_like(payload.get(key))
+                    if parsed is not None:
+                        return parsed
+            # 若外層 contains_pii 無法判定，嘗試解析內層 raw_text（常見於正規化包裝後）
+            raw_text = payload.get("raw_text")
+            if isinstance(raw_text, str):
+                nested = raw_text.strip()
+                if nested and nested != raw.strip():
+                    nested_parsed = parse_pii_binary_output(nested)
+                    if nested_parsed is not None:
+                        return nested_parsed
+    except json.JSONDecodeError:
+        pass
 
     text = raw.strip().lower()
     if not text:
