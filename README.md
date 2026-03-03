@@ -11,11 +11,11 @@
 
 ## 流程
 
-Phase0: 準備資料集、進行資料轉換（zh -> zh-TW）
-Phase1: 下載好 Guardian LLM &  LLM 模型 via Ollama
-Phase2: 建構好評測環境：包括 Pipeline、使用 uv 安裝好所有依賴
-Phase3: 執行評測、收集結果
-Phase4: 分析結果
+- Phase0: 準備資料集、進行資料轉換（zh -> zh-TW）
+- Phase1: 下載好 Guardian LLM &  LLM 模型 via Ollama
+- Phase2: 建構好評測環境：包括 Pipeline、使用 uv 安裝好所有依賴
+- Phase3: 執行評測、收集結果
+- Phase4: 分析結果
 
 ## 評測方法
 
