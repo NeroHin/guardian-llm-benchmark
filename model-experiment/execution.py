@@ -1336,7 +1336,14 @@ def _create_qwen_stream_runner(spec: ModelSpec) -> ModelRunner:
 
 def _create_huggingface_runner(spec: ModelSpec) -> ModelRunner:
     profile = (spec.profile or "granite_guard_json").strip().lower()
-    if profile in {"granite_guard_json", "granite", "granite_hf"}:
+    if profile in {
+        "granite_guard_json",
+        "granite",
+        "granite_hf",
+        "causal_lm_json",
+        "qwen_instruct_json",
+        "qwen2_5_instruct_json",
+    }:
         return GraniteHuggingFaceRunner(spec)
     if profile in {"qwen_stream", "qwen_guard_stream"}:
         return QwenGuardStreamRunner(spec)
