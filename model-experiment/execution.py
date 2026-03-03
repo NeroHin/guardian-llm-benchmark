@@ -14,6 +14,7 @@ import re
 import sys
 import time
 import gc
+import asyncio
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -645,7 +646,7 @@ def fetch_openrouter_pricing(api_key: str) -> dict[str, tuple[float, float]]:
 class OpenRouterRunner:
     def __init__(self, spec: ModelSpec) -> None:
         try:
-            from openai import OpenAI
+            from openai import OpenAI, AsyncOpenAI
         except ImportError as e:  # pragma: no cover - runtime dependency
             raise RuntimeError("缺少 openai 套件，請先安裝 requirements.txt") from e
 
@@ -658,6 +659,7 @@ class OpenRouterRunner:
             raise RuntimeError("找不到 OPENROUTER_API_KEY，請確認 .env 或環境變數")
 
         self._client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
+        self._async_client = AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
 
         headers: dict[str, str] = {}
         referer = os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("HTTP_REFERER")
@@ -667,6 +669,10 @@ class OpenRouterRunner:
         if title:
             headers["X-OpenRouter-Title"] = title
         self._extra_headers = headers
+        self._concurrency = max(
+            1,
+            int(self._settings.get("concurrency") or os.getenv("OPENROUTER_CONCURRENCY", "5")),
+        )
 
         self._pricing = fetch_openrouter_pricing(api_key)
 
@@ -702,7 +708,7 @@ class OpenRouterRunner:
         prompt_price, completion_price = pricing
         return float(prompt_tokens * prompt_price + completion_tokens * completion_price)
 
-    def predict(self, content: str) -> InferenceResult:
+    def _build_completion_kwargs(self, content: str) -> dict[str, Any]:
         prompts = build_prompts(
             model_id=self.model_id,
             task_id=TASK_ID,
@@ -728,9 +734,9 @@ class OpenRouterRunner:
             kwargs["extra_body"] = {"response_format": {"type": str(response_format)}}
         if self._extra_headers:
             kwargs["extra_headers"] = self._extra_headers
+        return kwargs
 
-        completion = self._client.chat.completions.create(**kwargs)
-
+    def _completion_to_result(self, completion: Any) -> InferenceResult:
         raw_text = ""
         if getattr(completion, "choices", None):
             message = completion.choices[0].message
@@ -752,8 +758,52 @@ class OpenRouterRunner:
             completion_tokens=completion_tokens,
         )
 
+    @property
+    def concurrency(self) -> int:
+        return self._concurrency
+
+    async def aclose_async_client(self) -> None:
+        client = getattr(self, "_async_client", None)
+        if client is None:
+            return
+
+        try:
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                maybe_awaitable = close_fn()
+                if hasattr(maybe_awaitable, "__await__"):
+                    await maybe_awaitable
+                return
+
+            aclose_fn = getattr(client, "aclose", None)
+            if callable(aclose_fn):
+                maybe_awaitable = aclose_fn()
+                if hasattr(maybe_awaitable, "__await__"):
+                    await maybe_awaitable
+        except Exception:
+            # 關閉連線失敗不應影響主流程
+            return
+
+    def predict(self, content: str) -> InferenceResult:
+        kwargs = self._build_completion_kwargs(content)
+        completion = self._client.chat.completions.create(**kwargs)
+        return self._completion_to_result(completion)
+
+    async def predict_async(self, content: str) -> InferenceResult:
+        kwargs = self._build_completion_kwargs(content)
+        completion = await self._async_client.chat.completions.create(**kwargs)
+        return self._completion_to_result(completion)
+
     def close(self) -> None:
-        super().close()
+        client = getattr(self, "_client", None)
+        if client is not None:
+            try:
+                close_fn = getattr(client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+            except Exception:
+                pass
+        return None
 
 
 def _resolve_hf_runtime_settings(
@@ -1308,6 +1358,77 @@ def create_runner(spec: ModelSpec) -> ModelRunner:
     return factory(spec)
 
 
+def _build_empty_content_inference() -> InferenceResult:
+    return InferenceResult(
+        output_json=json.dumps(
+            {
+                "contains_pii": None,
+                "label": "無法解析",
+                "confidence": None,
+                "reason": "empty content",
+                "raw_text": "",
+            },
+            ensure_ascii=False,
+        ),
+        contains_pii=None,
+        cost_usd=0.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+    )
+
+
+def _build_model_error_inference(error: Exception) -> InferenceResult:
+    return InferenceResult(
+        output_json=json.dumps(
+            {
+                "contains_pii": None,
+                "label": "無法解析",
+                "confidence": None,
+                "reason": f"model_error: {error}",
+                "raw_text": "",
+            },
+            ensure_ascii=False,
+        ),
+        contains_pii=None,
+        cost_usd=0.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+    )
+
+
+async def _predict_openrouter_async_batch(
+    rows: list[tuple[int, str]],
+    runner: Any,
+    *,
+    concurrency: int,
+) -> tuple[list[InferenceResult], list[float]]:
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+    inference_results: list[InferenceResult] = [_build_empty_content_inference() for _ in rows]
+    row_latencies_ms: list[float] = [0.0 for _ in rows]
+
+    async def _run_one(slot_idx: int, content: str) -> None:
+        async with semaphore:
+            row_start = time.perf_counter()
+            try:
+                inference = await runner.predict_async(content)
+            except Exception as e:
+                inference = _build_model_error_inference(e)
+            row_latencies_ms[slot_idx] = (time.perf_counter() - row_start) * 1000
+            inference_results[slot_idx] = inference
+
+    tasks = [_run_one(slot_idx, content) for slot_idx, (_, content) in enumerate(rows)]
+    try:
+        if tasks:
+            await asyncio.gather(*tasks)
+    finally:
+        if hasattr(runner, "aclose_async_client"):
+            try:
+                await runner.aclose_async_client()
+            except Exception:
+                pass
+    return inference_results, row_latencies_ms
+
+
 def run_single_model(
     df: pd.DataFrame,
     spec: ModelSpec,
@@ -1332,51 +1453,69 @@ def run_single_model(
 
     started = time.perf_counter()
     try:
-        for _, row in df.iterrows():
-            content = row.get(content_column, "")
-            content = "" if pd.isna(content) else str(content).strip()
+        if spec.provider == "openrouter" and hasattr(runner, "predict_async"):
+            prepared_rows: list[tuple[int, str]] = []
+            if content_column in df.columns:
+                raw_contents = df[content_column].tolist()
+            else:
+                raw_contents = ["" for _ in range(len(df))]
+            for idx, raw_content in enumerate(raw_contents):
+                content = raw_content
+                content = "" if pd.isna(content) else str(content).strip()
+                prepared_rows.append((idx, content))
 
-            if not content:
-                normalized = {
-                    "contains_pii": None,
-                    "label": "無法解析",
-                    "confidence": None,
-                    "reason": "empty content",
-                    "raw_text": "",
-                }
-                outputs.append(json.dumps(normalized, ensure_ascii=False))
-                predictions.append(None)
-                latencies_ms.append(0.0)
-                costs_usd.append(0.0)
-                continue
+            valid_slots: list[int] = []
+            valid_rows: list[tuple[int, str]] = []
+            inference_results: list[InferenceResult] = [_build_empty_content_inference() for _ in prepared_rows]
+            row_latencies_ms: list[float] = [0.0 for _ in prepared_rows]
 
-            row_start = time.perf_counter()
-            try:
-                inference = runner.predict(content)
-            except Exception as e:
-                inference = InferenceResult(
-                    output_json=json.dumps(
-                        {
-                            "contains_pii": None,
-                            "label": "無法解析",
-                            "confidence": None,
-                            "reason": f"model_error: {e}",
-                            "raw_text": "",
-                        },
-                        ensure_ascii=False,
-                    ),
-                    contains_pii=None,
-                    cost_usd=0.0,
-                    prompt_tokens=0,
-                    completion_tokens=0,
+            for slot_idx, (_, content) in enumerate(prepared_rows):
+                if content:
+                    valid_slots.append(slot_idx)
+                    valid_rows.append(prepared_rows[slot_idx])
+
+            if valid_rows:
+                concurrency = int(getattr(runner, "concurrency", 4) or 4)
+                valid_inferences, valid_latencies = asyncio.run(
+                    _predict_openrouter_async_batch(
+                        valid_rows,
+                        runner,
+                        concurrency=concurrency,
+                    )
                 )
+                for local_idx, slot_idx in enumerate(valid_slots):
+                    inference_results[slot_idx] = valid_inferences[local_idx]
+                    row_latencies_ms[slot_idx] = valid_latencies[local_idx]
 
-            latencies_ms.append((time.perf_counter() - row_start) * 1000)
-            costs_usd.append(inference.cost_usd)
-            outputs.append(inference.output_json)
-            predictions.append(inference.contains_pii)
-            prompt_tokens_total += inference.prompt_tokens
-            completion_tokens_total += inference.completion_tokens
+            for slot_idx in range(len(prepared_rows)):
+                inference = inference_results[slot_idx]
+                latencies_ms.append(row_latencies_ms[slot_idx])
+                costs_usd.append(inference.cost_usd)
+                outputs.append(inference.output_json)
+                predictions.append(inference.contains_pii)
+                prompt_tokens_total += inference.prompt_tokens
+                completion_tokens_total += inference.completion_tokens
+        else:
+            for _, row in df.iterrows():
+                content = row.get(content_column, "")
+                content = "" if pd.isna(content) else str(content).strip()
+
+                if not content:
+                    inference = _build_empty_content_inference()
+                    latencies_ms.append(0.0)
+                else:
+                    row_start = time.perf_counter()
+                    try:
+                        inference = runner.predict(content)
+                    except Exception as e:
+                        inference = _build_model_error_inference(e)
+                    latencies_ms.append((time.perf_counter() - row_start) * 1000)
+
+                costs_usd.append(inference.cost_usd)
+                outputs.append(inference.output_json)
+                predictions.append(inference.contains_pii)
+                prompt_tokens_total += inference.prompt_tokens
+                completion_tokens_total += inference.completion_tokens
     finally:
         runner.close()
         _release_cuda_memory()

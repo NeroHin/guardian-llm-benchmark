@@ -1,18 +1,18 @@
 version: 1
 models:
-  # - key: granite-openrouter
-  #   model_id: ibm-granite/granite-4.0-h-micro
-  #   provider: openrouter
-  #   enabled: true
-  #   settings:
-  #     temperature: 0
-  #     max_tokens: 128
-  #     response_format: json_object
+  - key: granite-openrouter
+    model_id: ibm-granite/granite-4.0-h-micro
+    provider: openrouter
+    enabled: false
+    settings:
+      temperature: 0
+      max_tokens: 128
+      response_format: json_object
 
   - key: gpt41nano-openrouter
     model_id: openai/gpt-4.1-nano
     provider: openrouter
-    enabled: true
+    enabled: false
     settings:
       temperature: 0
       max_tokens: 128
@@ -21,7 +21,7 @@ models:
   - key: qwen3guard4b-stream
     model_id: Qwen/Qwen3Guard-Stream-4B
     provider: qwen_stream
-    enabled: true
+    enabled: false
     profile: qwen_stream
     settings:
       trust_remote_code: true
@@ -31,7 +31,7 @@ models:
   - key: qwen3guard06b-stream
     model_id: Qwen/Qwen3Guard-Stream-0.6B
     provider: qwen_stream
-    enabled: true
+    enabled: false
     profile: qwen_stream
     settings:
       trust_remote_code: true

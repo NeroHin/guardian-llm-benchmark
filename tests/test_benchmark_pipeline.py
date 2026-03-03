@@ -123,3 +123,60 @@ def test_run_single_model_with_fake_runner(monkeypatch) -> None:
     assert meta["fn"] == 0
     assert meta["tpr"] == 1.0
     assert meta["fpr"] == 0.0
+
+
+def test_run_single_model_openrouter_uses_async_predict(monkeypatch) -> None:
+    execution = _load_execution_module()
+
+    class AsyncOnlyRunner:
+        model_id = "fake/async-model"
+        provider = "openrouter"
+        concurrency = 2
+
+        def __init__(self) -> None:
+            self.sync_called = False
+
+        def predict(self, content: str):
+            self.sync_called = True
+            raise AssertionError("sync predict 不應在 openrouter async 路徑被呼叫")
+
+        async def predict_async(self, content: str):
+            contains = "匿名化文本" not in content
+            payload = {
+                "contains_pii": contains,
+                "label": "是" if contains else "否",
+                "confidence": 0.8,
+                "reason": "async-fake",
+                "raw_text": "",
+            }
+            return execution.InferenceResult(
+                output_json=json.dumps(payload, ensure_ascii=False),
+                contains_pii=contains,
+                cost_usd=0.002,
+                prompt_tokens=6,
+                completion_tokens=1,
+            )
+
+        def close(self) -> None:
+            return None
+
+    runner = AsyncOnlyRunner()
+    monkeypatch.setattr(execution, "create_runner", lambda spec: runner)
+
+    df = pd.DataFrame(
+        {
+            "naturalParagraph": ["PII 內容", "匿名化文本：安全內容"],
+            "ground_truth": [True, False],
+            "sample_type": ["positive", "negative"],
+        }
+    )
+    spec = execution.ModelSpec(key="fake-openrouter-async", model_id="fake/async-model", provider="openrouter")
+
+    result_df, meta = execution.run_single_model(df, spec)
+
+    assert runner.sync_called is False
+    assert len(result_df) == 2
+    assert meta["tp"] == 1
+    assert meta["tn"] == 1
+    assert meta["fp"] == 0
+    assert meta["fn"] == 0
