@@ -4,11 +4,8 @@
 ## Model (updated: 2026/02/14)
 - ibm-granite/granite-4.0-h-1b: 一個 1B 的模型、使用了 Mamba2 + Attention 
 - ibm-granite/granite-4.0-h-micro: 一個 3B 的模型、使用了 Mamba2 + Attention 
-- ibm-granite/granite-4.0-h-tiny: 一個 7B 的模型、使用了 Mamba2 + Attention     
 - Qwen/Qwen3Guard-Stream-0.6B： 一個支授串流檢測的 0.6B 模型 (TBD)
 - Qwen/Qwen3Guard-Stream-4B: 一個支授串流檢測的 4B 模型 (TBD)
-- Qwen/Qwen3Guard-Stream-8B: 一個支授串流檢測的 8B 模型 (TBD)
-
 
 # 流程、方法與資料
 
@@ -17,8 +14,8 @@
 Phase0: 準備資料集、進行資料轉換（zh -> zh-TW）
 Phase1: 下載好 Guardian LLM &  LLM 模型 via Ollama
 Phase2: 建構好評測環境：包括 Pipeline、使用 uv 安裝好所有依賴
-phase3: 執行評測、收集結果
-phase4: 分析結果
+Phase3: 執行評測、收集結果
+Phase4: 分析結果
 
 ## 評測方法
 
@@ -73,4 +70,82 @@ uv pip install -r requirements.txt
 opencc
 ollama
 pandas
+```
+
+## 使用方式
+
+
+### 1) 先把環境拉起來
+
+```bash
+# 建立虛擬環境（第一次才要）
+uv venv
+
+# 安裝專案依賴（建議）
+uv sync --all-groups
+```
+
+如果你習慣舊方式，也可以：
+
+```bash
+uv pip install -r requirements.txt
+```
+
+### 2) 設定 API Key（OpenRouter 模型會用到）
+
+在專案根目錄建立 `.env`，至少放這個：
+
+```bash
+OPENROUTER_API_KEY=你的金鑰
+```
+
+### 3) 模型清單改在 YAML 管理
+
+路徑：`model-experiment/model_specs.yaml`
+
+- `enabled: true`：這個模型會被執行
+- `enabled: false`：先關閉，不會跑
+- `provider`：
+  - `openrouter`
+  - `qwen_stream`
+  - `huggingface`
+- `settings`：各 provider 的參數（像 `max_tokens`、`torch_dtype`）
+
+### 4) 直接執行 Benchmark
+
+```bash
+# 預設跑 sample 100（正樣本 + 負樣本）
+uv run python model-experiment/execution.py
+```
+
+常用參數：
+
+```bash
+# 跑 10 筆（快速驗證）
+uv run python model-experiment/execution.py --sample-limit 10
+
+# 只跑正樣本（不算 FPR）
+uv run python model-experiment/execution.py --no-negative
+
+# 指定模型（可用 key 或 model_id，逗號分隔）
+uv run python model-experiment/execution.py --models qwen3guard4b-stream
+uv run python model-experiment/execution.py --models openai/gpt-4.1-nano
+
+# 指定模型 YAML 路徑
+uv run python model-experiment/execution.py --models-config model-experiment/model_specs.yaml
+
+# 指定 non-PII 負樣本資料
+uv run python model-experiment/execution.py --non-pii-dataset dataset/data_person_1000_non_pii_100.csv
+```
+
+### 5) 結果會存在哪裡
+
+- 單模型結果：`model-experiment/results/*_pii_benchmark_results.csv`
+- 模型比較表：`model-experiment/results/pii_benchmark_comparison.csv`
+- Qwen stream 偵錯 log：`model-experiment/results/qwen_stream_debug.log`
+
+### 6) 驗證程式有沒有壞
+
+```bash
+uv run pytest
 ```
