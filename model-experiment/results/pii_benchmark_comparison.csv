@@ -1,0 +1,2 @@
+model_id,provider,execution_time_sec,model_params_b,prompt_tokens_total,completion_tokens_total,tpr,fpr,tp,tn,fp,fn,unparseable,overhead_latency_ms_avg,overhead_latency_ms_p95,cost_usd_total,cost_usd_avg,accuracy,precision,recall,f1,total
+Qwen/Qwen3Guard-Stream-4B,qwen_stream,1356.75,4.0,2592,0,0.4,0.0,4,10,0,6,0,67796.54,82859.45,0.0,0.0,0.7,1.0,0.4,0.5714,20
