@@ -22,6 +22,7 @@ def _load_execution_module() -> ModuleType:
         raise RuntimeError(f"無法載入模組: {execution_path}")
 
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -78,3 +79,25 @@ def test_normalized_json_can_be_serialized() -> None:
     serialized = json.dumps(normalized, ensure_ascii=False)
 
     assert '"contains_pii": false' in serialized
+
+
+def test_parse_qwen_text_response_extracts_label_categories_refusal() -> None:
+    execution = _load_execution_module()
+    content = (
+        "Safety: Unsafe\n"
+        "Category: PII, Unethical Acts\n"
+        "Refusal: No"
+    )
+    label, categories, refusal = execution.parse_qwen_text_response(content)
+
+    assert label == "Unsafe"
+    assert "PII" in categories
+    assert "Unethical Acts" in categories
+    assert refusal == "No"
+
+
+def test_contains_pii_category_detection() -> None:
+    execution = _load_execution_module()
+    assert execution._contains_pii_category("PII, Unethical Acts") is True
+    assert execution._contains_pii_category("Violent", ["PII", "Violent"]) is True
+    assert execution._contains_pii_category("None") is False
