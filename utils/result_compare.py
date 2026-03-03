@@ -22,6 +22,8 @@ MODEL_PARAMS: dict[str, float] = {
     "granite4:1b": 1.0,
     "granite4:micro": 3.0,
     "granite4:tiny": 7.0,
+    "ibm-granite/granite-4.0-h-micro": 3.0,
+    "Qwen/Qwen3Guard-Stream-4B": 4.0,
 }
 
 
