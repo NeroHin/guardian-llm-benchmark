@@ -111,6 +111,61 @@ OPENROUTER_API_KEY=你的金鑰
   - `huggingface`
 - `settings`：各 provider 的參數（像 `max_tokens`、`torch_dtype`）
 
+建議直接用下面這個格式：
+
+```yaml
+version: 1
+models:
+  - key: granite-openrouter
+    model_id: ibm-granite/granite-4.0-h-micro
+    provider: openrouter
+    enabled: true
+    settings:
+      temperature: 0
+      max_tokens: 128
+      response_format: json_object
+
+  - key: qwen3guard4b-stream
+    model_id: Qwen/Qwen3Guard-Stream-4B
+    provider: qwen_stream
+    enabled: true
+    profile: qwen_stream
+    settings:
+      trust_remote_code: true
+      torch_dtype: auto
+      device_map: auto
+```
+
+欄位說明（重點版）：
+
+- `version`：目前固定 `1`
+- `models`：模型清單陣列
+- `key`：模型唯一識別碼，建議用短名稱（之後 `--models` 可直接指定）
+- `model_id`：實際模型 ID（例如 OpenRouter 或 Hugging Face 的 model id）
+- `provider`：目前支援 `openrouter` / `qwen_stream` / `huggingface`
+- `enabled`：是否要跑這個模型
+- `profile`：給同 provider 做子類型區分（例如 HF 下用 `granite_guard_json` 或 `qwen_stream`）
+- `settings`：provider 專屬參數
+
+常見 `settings` 參數：
+
+- `openrouter`：`temperature`、`max_tokens`、`response_format`
+- `qwen_stream`：`trust_remote_code`、`torch_dtype`、`device_map`
+- `huggingface`（granite 類）：`trust_remote_code`、`torch_dtype`、`device_map`、`max_new_tokens`、`do_sample`
+
+實際調整流程（最常用）：
+
+1. 新增一個 model block，填好 `key/model_id/provider`
+2. 先設 `enabled: false`（避免一改就全部跑）
+3. 確認參數後改成 `enabled: true`
+4. 用 `--models <key>` 先 smoke test（例如 `--models granite-openrouter`）
+
+補充：
+
+- `--models` 可吃 `key` 或 `model_id`
+- YAML 檔案不存在時，程式會 fallback 到 legacy 預設模型
+- YAML 檔案存在但格式錯誤時，會直接 fail fast（避免跑錯 benchmark）
+
 ### 4) 直接執行 Benchmark
 
 ```bash
