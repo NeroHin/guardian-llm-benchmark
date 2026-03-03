@@ -62,3 +62,30 @@ models:
       max_new_tokens: 256
       do_sample: false
 
+  - key: qwen25-05b-hf
+    model_id: Qwen/Qwen2.5-0.5B-Instruct
+    provider: huggingface
+    enabled: true
+    profile: qwen_instruct_json
+    settings:
+      trust_remote_code: false
+      torch_dtype: auto
+      device_map: auto
+      max_input_tokens: 512
+      max_new_tokens: 128
+      do_sample: false
+      use_cache: true
+
+  - key: qwen25-3b-hf
+    model_id: Qwen/Qwen2.5-3B-Instruct
+    provider: huggingface
+    enabled: true
+    profile: qwen_instruct_json
+    settings:
+      trust_remote_code: false
+      torch_dtype: auto
+      device_map: auto
+      max_input_tokens: 512
+      max_new_tokens: 128
+      do_sample: false
+      use_cache: true

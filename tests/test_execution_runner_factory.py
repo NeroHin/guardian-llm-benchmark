@@ -74,9 +74,16 @@ def test_create_huggingface_runner_uses_profile(monkeypatch) -> None:
         provider="huggingface",
         profile="qwen_stream",
     )
+    qwen_instruct_spec = execution.ModelSpec(
+        key="qwen-instruct",
+        model_id="Qwen/Qwen2.5-0.5B-Instruct",
+        provider="huggingface",
+        profile="qwen_instruct_json",
+    )
 
     assert isinstance(execution._create_huggingface_runner(granite_spec), DummyGranite)
     assert isinstance(execution._create_huggingface_runner(qwen_spec), DummyQwen)
+    assert isinstance(execution._create_huggingface_runner(qwen_instruct_spec), DummyGranite)
 
 
 def test_resolve_hf_runtime_settings_honors_config() -> None:
