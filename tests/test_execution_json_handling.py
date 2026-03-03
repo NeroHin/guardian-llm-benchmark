@@ -101,3 +101,21 @@ def test_contains_pii_category_detection() -> None:
     assert execution._contains_pii_category("PII, Unethical Acts") is True
     assert execution._contains_pii_category("Violent", ["PII", "Violent"]) is True
     assert execution._contains_pii_category("None") is False
+
+
+def test_infer_first_pii_index_from_qwen_result_category_only() -> None:
+    execution = _load_execution_module()
+    result = {
+        "risk_level": ["Safe", "Safe", "Unsafe"],
+        "category": ["None", "PII", "PII"],
+    }
+    assert execution._infer_first_pii_index(result) == 1
+
+
+def test_infer_first_pii_index_returns_none_without_pii() -> None:
+    execution = _load_execution_module()
+    result = {
+        "risk_level": ["Unsafe", "Safe"],
+        "category": ["Violent", "None"],
+    }
+    assert execution._infer_first_pii_index(result) is None
