@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+import gc
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,6 +99,30 @@ def _append_qwen_debug(event: dict[str, Any]) -> None:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except Exception:
         # 偵錯寫檔失敗不應影響主流程
+        return
+
+
+def _release_cuda_memory(torch_module: Any | None = None) -> None:
+    """
+    盡可能釋放 CUDA 記憶體：
+    1) 先 GC 讓 Python 物件解除參考
+    2) 再由 torch CUDA allocator 釋放 cache/IPC 區塊
+    """
+    gc.collect()
+    try:
+        tm = torch_module
+        if tm is None:
+            import torch as tm  # type: ignore
+
+        if tm.cuda.is_available():
+            try:
+                tm.cuda.synchronize()
+            except Exception:
+                pass
+            tm.cuda.empty_cache()
+            tm.cuda.ipc_collect()
+    except Exception:
+        # 記憶體回收失敗不應中斷主流程
         return
 
 
@@ -420,24 +445,23 @@ def _pick_indexed_value(value: Any, idx: int) -> str:
     return str(value) if value is not None else ""
 
 
-def _infer_first_unsafe_pii_index(result: dict[str, Any]) -> int | None:
+def _infer_first_pii_index(result: dict[str, Any]) -> int | None:
     """
-    從 Qwen result 的序列欄位推估首次命中 Unsafe + PII 的 token index。
+    從 Qwen result 的序列欄位推估首次命中 PII category 的 token index。
+    注意：PII 判斷僅依 category，不依賴 risk_level（Safe/Unsafe 皆可能含 PII）。
     若無法推估回傳 None。
     """
-    risks = result.get("risk_level")
     cats = result.get("category")
-    if not isinstance(risks, list) and not isinstance(cats, list):
+    if not isinstance(cats, list):
         return None
 
-    length = max(len(risks) if isinstance(risks, list) else 0, len(cats) if isinstance(cats, list) else 0)
+    length = len(cats)
     if length <= 0:
         return None
 
     for i in range(length):
-        r = _pick_indexed_value(risks, i)
         c = _pick_indexed_value(cats, i)
-        if r and r.lower() == "unsafe" and _contains_pii_category(c):
+        if _contains_pii_category(c):
             return i
     return None
 
@@ -729,19 +753,24 @@ class OpenRouterRunner:
         )
 
     def close(self) -> None:
-        return None
+        super().close()
 
 
 def _resolve_hf_runtime_settings(
     settings: dict[str, Any],
     *,
     cuda_available: bool,
+    bf16_available: bool = False,
 ) -> dict[str, Any]:
     trust_remote_code = bool(settings.get("trust_remote_code", True))
 
     dtype_cfg = str(settings.get("torch_dtype", "auto")).strip().lower()
     if dtype_cfg == "auto":
-        torch_dtype_name = "bfloat16" if cuda_available else "float32"
+        if cuda_available:
+            # Colab/T4 常不支援原生 bf16，auto 應優先選 float16 避免額外顯存壓力。
+            torch_dtype_name = "bfloat16" if bf16_available else "float16"
+        else:
+            torch_dtype_name = "float32"
     elif dtype_cfg in {"bfloat16", "float16", "float32"}:
         torch_dtype_name = dtype_cfg
     else:
@@ -795,6 +824,7 @@ class BaseHuggingFaceRunner:
         runtime = _resolve_hf_runtime_settings(
             self._settings,
             cuda_available=bool(torch.cuda.is_available()),
+            bf16_available=bool(torch.cuda.is_bf16_supported()) if torch.cuda.is_available() else False,
         )
         self._trust_remote_code = runtime["trust_remote_code"]
         self._torch_dtype_name = runtime["torch_dtype_name"]
@@ -811,10 +841,38 @@ class BaseHuggingFaceRunner:
         }
         if self._device_map is not None:
             kwargs["device_map"] = self._device_map
+            max_memory = self._settings.get("max_memory")
+            if isinstance(max_memory, dict) and max_memory:
+                kwargs["max_memory"] = max_memory
+            else:
+                cuda_gib = self._settings.get("max_memory_cuda_gib")
+                cpu_gib = self._settings.get("max_memory_cpu_gib")
+                if cuda_gib is not None or cpu_gib is not None:
+                    mm: dict[Any, str] = {}
+                    if cuda_gib is not None:
+                        mm[0] = f"{int(cuda_gib)}GiB"
+                    if cpu_gib is not None:
+                        mm["cpu"] = f"{int(cpu_gib)}GiB"
+                    if mm:
+                        kwargs["max_memory"] = mm
+
+            offload_folder = self._settings.get("offload_folder")
+            if offload_folder:
+                kwargs["offload_folder"] = str(offload_folder)
         return kwargs
 
     def close(self) -> None:
-        return None
+        # 釋放 HF 模型資源，避免多模型序列 benchmark 時 GPU OOM。
+        for attr in ("_model", "_tokenizer", "_input_device"):
+            if hasattr(self, attr):
+                obj = getattr(self, attr)
+                setattr(self, attr, None)
+                try:
+                    del obj
+                except Exception:
+                    pass
+
+        _release_cuda_memory(getattr(self, "_torch", None))
 
 
 class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
@@ -839,11 +897,33 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
             device_name = "cuda" if self._torch.cuda.is_available() else "cpu"
             self._model = self._model.to(device_name)
             self._input_device = self._torch.device(device_name)
+        else:
+            self._input_device = self._detect_input_device()
 
         if getattr(self._tokenizer, "pad_token", None) is None:
             eos_token = getattr(self._tokenizer, "eos_token", None)
             if eos_token is not None:
                 self._tokenizer.pad_token = eos_token
+
+    def _detect_input_device(self) -> Any:
+        """在 device_map=auto 等情況下，找出模型實際接受 input_ids 的裝置。"""
+        try:
+            input_embeddings = self._model.get_input_embeddings()
+            if input_embeddings is not None and hasattr(input_embeddings, "weight"):
+                emb_device = input_embeddings.weight.device
+                if str(emb_device) != "meta":
+                    return emb_device
+        except Exception:
+            pass
+
+        try:
+            first_param_device = next(self._model.parameters()).device
+            if str(first_param_device) != "meta":
+                return first_param_device
+        except Exception:
+            pass
+
+        return self._torch.device("cuda:0" if self._torch.cuda.is_available() else "cpu")
 
     def _build_prompt_text(self, messages: list[dict[str, str]]) -> str:
         apply_template = getattr(self._tokenizer, "apply_chat_template", None)
@@ -865,9 +945,23 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
         return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
 
     def _build_generation_kwargs(self) -> dict[str, Any]:
+        do_sample_raw = self._settings.get("do_sample", False)
+        do_sample = _coerce_bool(do_sample_raw)
+        if do_sample is None:
+            raise ValueError(
+                f"settings.do_sample 必須為布林值（true/false），目前收到: {do_sample_raw!r}"
+            )
+        use_cache_raw = self._settings.get("use_cache", False)
+        use_cache = _coerce_bool(use_cache_raw)
+        if use_cache is None:
+            raise ValueError(
+                f"settings.use_cache 必須為布林值（true/false），目前收到: {use_cache_raw!r}"
+            )
+
         kwargs: dict[str, Any] = {
             "max_new_tokens": int(self._settings.get("max_new_tokens", 128)),
-            "do_sample": bool(self._settings.get("do_sample", False)),
+            "do_sample": do_sample,
+            "use_cache": use_cache,
         }
         temperature = self._settings.get("temperature")
         if kwargs["do_sample"] and temperature is not None:
@@ -886,9 +980,18 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
         ]
         prompt_text = self._build_prompt_text(messages)
 
-        model_inputs = self._tokenizer(prompt_text, return_tensors="pt")
+        max_input_tokens = self._settings.get("max_input_tokens")
+        token_kwargs: dict[str, Any] = {"return_tensors": "pt"}
+        if max_input_tokens is not None:
+            token_kwargs["truncation"] = True
+            token_kwargs["max_length"] = int(max_input_tokens)
+
+        model_inputs = self._tokenizer(prompt_text, **token_kwargs)
         if self._input_device is not None:
-            model_inputs = {k: v.to(self._input_device) for k, v in model_inputs.items()}
+            model_inputs = {
+                k: (v.to(self._input_device) if hasattr(v, "to") else v)
+                for k, v in model_inputs.items()
+            }
 
         with self._torch.no_grad():
             generated_ids = self._model.generate(
@@ -936,6 +1039,49 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             return str(value[-1]) if value else ""
         return str(value) if value is not None else ""
 
+    def _stream_moderate_single_token(
+        self,
+        token_ids: Any,
+        token_index: int,
+        stream_state: Any,
+    ) -> tuple[dict[str, Any], Any]:
+        """
+        對單一 token 嘗試不同輸入形態，兼容不同 Qwen3Guard-Stream 版本實作差異。
+        """
+        token_1d = token_ids[token_index : token_index + 1]
+        attempts: list[tuple[str, Any]] = [("tensor_1d", token_1d)]
+        if hasattr(token_1d, "unsqueeze"):
+            attempts.insert(0, ("tensor_2d", token_1d.unsqueeze(0)))
+        token_0d = token_ids[token_index]
+        attempts.append(("tensor_0d", token_0d))
+        try:
+            attempts.append(("int", int(token_0d.item())))
+        except Exception:
+            pass
+
+        errors: list[str] = []
+        for input_kind, token_input in attempts:
+            try:
+                result, next_state = self._model.stream_moderate_from_ids(
+                    token_input,
+                    role="user",
+                    stream_state=stream_state,
+                )
+                return result, next_state
+            except Exception as e:
+                errors.append(f"{input_kind}: {e}")
+                _append_qwen_debug(
+                    {
+                        "event": "token_input_attempt_failed",
+                        "model_id": self.model_id,
+                        "token_index": token_index,
+                        "input_kind": input_kind,
+                        "error": str(e),
+                    }
+                )
+
+        raise RuntimeError("; ".join(errors))
+
     def predict(self, content: str) -> InferenceResult:
         messages = [{"role": "user", "content": content}]
 
@@ -960,6 +1106,10 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         result: dict[str, Any] = {}
         processed_tokens = 0
         early_stopped = False
+        trigger_idx: int | None = None
+        inferred_pii = False
+        inferred_trigger_idx: int | None = None
+        stream_mode = "token_by_token"
         token_count = int(token_ids.shape[0]) if len(token_ids.shape) > 0 else 0
         _append_qwen_debug(
             {
@@ -970,25 +1120,74 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             }
         )
         try:
-            # 依官方範例：user 輸入一次餵完整 token 序列
-            result, stream_state = self._model.stream_moderate_from_ids(
-                token_ids,
-                role="user",
-                stream_state=None,
-            )
-            trigger_idx = _infer_first_unsafe_pii_index(result)
-            if trigger_idx is not None:
-                early_stopped = True
-                processed_tokens = min(token_count, trigger_idx + 1)
-                _append_qwen_debug(
-                    {
-                        "event": "early_stop_inferred_from_result",
-                        "model_id": self.model_id,
-                        "token_index": trigger_idx,
-                    }
-                )
-            else:
-                processed_tokens = token_count
+            # 逐 token moderation：命中 PII category 立即 early stop。
+            for i in range(token_count):
+                try:
+                    result, stream_state = self._stream_moderate_single_token(
+                        token_ids=token_ids,
+                        token_index=i,
+                        stream_state=stream_state,
+                    )
+                except Exception as e:
+                    if i == 0:
+                        # 若連第一個 token 都無法串流，回退為一次性 user moderation。
+                        stream_mode = "full_sequence_fallback"
+                        _append_qwen_debug(
+                            {
+                                "event": "fallback_to_full_sequence",
+                                "model_id": self.model_id,
+                                "reason": str(e),
+                            }
+                        )
+                        result, stream_state = self._model.stream_moderate_from_ids(
+                            token_ids,
+                            role="user",
+                            stream_state=stream_state,
+                        )
+                        processed_tokens = token_count
+                        break
+                    _append_qwen_debug(
+                        {
+                            "event": "token_step_failed",
+                            "model_id": self.model_id,
+                            "token_index": i,
+                            "error": str(e),
+                        }
+                    )
+                    raise RuntimeError(f"stream token step failed at index={i}: {e}") from e
+
+                processed_tokens = i + 1
+                step_category = self._last_item(result.get("category"))
+                if _contains_pii_category(step_category):
+                    early_stopped = True
+                    trigger_idx = i
+                    _append_qwen_debug(
+                        {
+                            "event": "early_stop_triggered_by_pii_category",
+                            "model_id": self.model_id,
+                            "token_index": i,
+                            "category": step_category,
+                        }
+                    )
+                    break
+
+            # 防守式回補：若上方沒觸發，但序列中存在 PII，僅作推估標記。
+            # 注意：這不代表真實 early stop，不應改寫 early_stopped。
+            if not early_stopped and result:
+                inferred_idx = _infer_first_pii_index(result)
+                if inferred_idx is not None:
+                    inferred_pii = True
+                    inferred_trigger_idx = inferred_idx
+                    _append_qwen_debug(
+                        {
+                            "event": "pii_inferred_from_result_without_early_stop",
+                            "model_id": self.model_id,
+                            "token_index": inferred_idx,
+                            "stream_mode": stream_mode,
+                        }
+                    )
+                elif processed_tokens == 0:
+                    processed_tokens = token_count
         finally:
             if stream_state is not None:
                 try:
@@ -1014,8 +1213,8 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         contains_pii = None
         if parsed_categories:
             contains_pii = _contains_pii_category(category, parsed_categories)
-        elif risk_level:
-            contains_pii = risk_level.lower() != "safe"
+        elif category:
+            contains_pii = _contains_pii_category(category)
 
         reason_parts = []
         if risk_level:
@@ -1031,7 +1230,11 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                 "category": category,
                 "refusal": parsed_refusal,
                 "text_output": text_output,
+                "stream_mode": stream_mode,
                 "early_stopped": early_stopped,
+                "trigger_index": trigger_idx,
+                "inferred_pii": inferred_pii,
+                "inferred_trigger_index": inferred_trigger_idx,
                 "processed_tokens": processed_tokens,
                 "total_tokens": int(token_ids.shape[0]),
             },
@@ -1047,7 +1250,11 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             "risk_level": risk_level,
             "category": category,
             "refusal": parsed_refusal,
+            "stream_mode": stream_mode,
             "early_stopped": early_stopped,
+            "trigger_index": trigger_idx,
+            "inferred_pii": inferred_pii,
+            "inferred_trigger_index": inferred_trigger_idx,
             "processed_tokens": processed_tokens,
             "total_tokens": int(token_ids.shape[0]),
         }
@@ -1172,6 +1379,7 @@ def run_single_model(
             completion_tokens_total += inference.completion_tokens
     finally:
         runner.close()
+        _release_cuda_memory()
 
     elapsed = time.perf_counter() - started
 
