@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pandas as pd
 
-from utils.result_process import parse_pii_binary_output, process_model_run
+from utils.result_process import BinaryMetrics, parse_pii_binary_output, process_model_run, save_processed_results
 
 
 def test_parse_pii_binary_output_from_json_string() -> None:
@@ -46,3 +49,34 @@ def test_parse_pii_binary_output_from_nested_raw_text() -> None:
         '"reason": "", "raw_text": "{\\n  \\"contains_pii\\": true,\\n  \\"label\\": \\"是\\",\\n  \\"confidence\\": 0.98"}'
     )
     assert parse_pii_binary_output(wrapped) is True
+
+
+def test_save_processed_results_supports_append_mode(tmp_path: Path) -> None:
+    out_csv = tmp_path / "result.csv"
+    df1 = pd.DataFrame({"a": [1], "b": ["x"]})
+    df2 = pd.DataFrame({"a": [2], "b": ["y"]})
+
+    metrics = BinaryMetrics(
+        accuracy=1.0,
+        precision=1.0,
+        recall=1.0,
+        f1=1.0,
+        tp=1,
+        tn=0,
+        fp=0,
+        fn=0,
+        total=1,
+    )
+
+    save_processed_results(df1, metrics, str(out_csv), append=False)
+    save_processed_results(df2, metrics, str(out_csv), append=True)
+
+    merged = pd.read_csv(out_csv)
+    assert len(merged) == 2
+    assert merged["a"].tolist() == [1, 2]
+
+    metrics_jsonl = out_csv.with_name("result_metrics.jsonl")
+    lines = [line for line in metrics_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["accuracy"] == 1.0

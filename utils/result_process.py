@@ -318,19 +318,30 @@ def save_processed_results(
     output_path: str,
     *,
     extra_info: dict[str, Any] | None = None,
+    append: bool = False,
 ) -> None:
     """
     將處理後的結果與指標存成 CSV 與 JSON meta。
     """
-    result_df.to_csv(output_path, index=False, encoding="utf-8")
+    output = pd.DataFrame(result_df).copy()
+    write_mode = "a" if append and pd.io.common.file_exists(output_path) else "w"
+    write_header = not (append and write_mode == "a")
+    output.to_csv(output_path, index=False, encoding="utf-8", mode=write_mode, header=write_header)
     if metrics is not None:
         import json
 
-        meta_path = (
-            output_path.replace(".csv", "_metrics.json")
-            if output_path.endswith(".csv")
-            else output_path + "_metrics.json"
-        )
+        if output_path.endswith(".csv"):
+            meta_path = (
+                output_path.replace(".csv", "_metrics.jsonl")
+                if append
+                else output_path.replace(".csv", "_metrics.json")
+            )
+        else:
+            meta_path = output_path + ("_metrics.jsonl" if append else "_metrics.json")
         meta = {**metrics.to_dict(), **(extra_info or {})}
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        if append:
+            with open(meta_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+        else:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)

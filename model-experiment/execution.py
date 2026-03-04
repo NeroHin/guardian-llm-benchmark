@@ -127,6 +127,12 @@ def _release_cuda_memory(torch_module: Any | None = None) -> None:
         return
 
 
+def _save_dataframe_csv(df: pd.DataFrame, path: Path, *, append: bool) -> None:
+    write_mode = "a" if append and path.exists() else "w"
+    write_header = not (append and path.exists())
+    df.to_csv(path, index=False, encoding="utf-8", mode=write_mode, header=write_header)
+
+
 # =============================================================================
 # 型別
 # =============================================================================
@@ -813,8 +819,18 @@ def _resolve_hf_runtime_settings(
     bf16_available: bool = False,
 ) -> dict[str, Any]:
     trust_remote_code = bool(settings.get("trust_remote_code", True))
+    allow_bf16_fallback = _coerce_bool(settings.get("allow_bf16_fallback", True))
+    if allow_bf16_fallback is None:
+        allow_bf16_fallback = True
 
     dtype_cfg = str(settings.get("torch_dtype", "auto")).strip().lower()
+    if dtype_cfg in {"bf16"}:
+        dtype_cfg = "bfloat16"
+    elif dtype_cfg in {"fp16", "half"}:
+        dtype_cfg = "float16"
+    elif dtype_cfg in {"fp32"}:
+        dtype_cfg = "float32"
+
     if dtype_cfg == "auto":
         if cuda_available:
             # Colab/T4 常不支援原生 bf16，auto 應優先選 float16 避免額外顯存壓力。
@@ -822,7 +838,16 @@ def _resolve_hf_runtime_settings(
         else:
             torch_dtype_name = "float32"
     elif dtype_cfg in {"bfloat16", "float16", "float32"}:
-        torch_dtype_name = dtype_cfg
+        if dtype_cfg == "bfloat16" and cuda_available and not bf16_available:
+            if allow_bf16_fallback:
+                torch_dtype_name = "float16"
+            else:
+                raise ValueError(
+                    "目前 GPU 不支援 bfloat16（需要 sm_80+）；"
+                    "請改用 torch_dtype=float16 或設定 allow_bf16_fallback=true"
+                )
+        else:
+            torch_dtype_name = dtype_cfg
     else:
         raise ValueError(f"不支援的 torch_dtype: {dtype_cfg}")
 
@@ -871,10 +896,23 @@ class BaseHuggingFaceRunner:
             config_utils.layer_type_validation = _layer_type_validation
 
         self._torch = torch
+        bf16_supported = False
+        if torch.cuda.is_available():
+            try:
+                capability = torch.cuda.get_device_capability()
+                sm80_or_newer = isinstance(capability, tuple) and len(capability) >= 1 and capability[0] >= 8
+            except Exception:
+                sm80_or_newer = False
+            try:
+                torch_bf16 = bool(torch.cuda.is_bf16_supported())
+            except Exception:
+                torch_bf16 = False
+            bf16_supported = bool(sm80_or_newer and torch_bf16)
+
         runtime = _resolve_hf_runtime_settings(
             self._settings,
             cuda_available=bool(torch.cuda.is_available()),
-            bf16_available=bool(torch.cuda.is_bf16_supported()) if torch.cuda.is_available() else False,
+            bf16_available=bf16_supported,
         )
         self._trust_remote_code = runtime["trust_remote_code"]
         self._torch_dtype_name = runtime["torch_dtype_name"]
@@ -1620,6 +1658,7 @@ def main(
     model_ids: list[str] | None = None,
     non_pii_dataset_path: Path = NON_PII_DATASET_PATH,
     models_config_path: Path = MODEL_SPECS_CONFIG_PATH,
+    append_results: bool = False,
 ) -> None:
     """主流程：載入資料、跑模型、輸出 benchmark 結果。"""
     load_dotenv()
@@ -1655,16 +1694,42 @@ def main(
     else:
         print(f"載入 {len(eval_df)} 筆評測資料（正樣本 {sample_limit} 筆）")
 
+    experiment_started_dt = datetime.now()
+    experiment_started_at = experiment_started_dt.isoformat(timespec="seconds")
+    run_id = experiment_started_dt.strftime("%Y%m%dT%H%M%S")
+
     all_metrics: list[dict[str, Any]] = []
     for spec in specs:
         print(f"\\n執行模型: {spec.key} | {spec.model_id} ({spec.provider}) ...")
+        model_started_at = datetime.now().isoformat(timespec="seconds")
         try:
             result_df, meta = run_single_model(eval_df, spec)
+            model_finished_at = datetime.now().isoformat(timespec="seconds")
+
+            result_df["run_id"] = run_id
+            result_df["experiment_started_at"] = experiment_started_at
+            result_df["model_started_at"] = model_started_at
+            result_df["model_finished_at"] = model_finished_at
+
+            meta.update(
+                {
+                    "run_id": run_id,
+                    "experiment_started_at": experiment_started_at,
+                    "model_started_at": model_started_at,
+                    "model_finished_at": model_finished_at,
+                }
+            )
             all_metrics.append(meta)
 
             safe_name = f"{spec.key}__{spec.model_id}".replace("/", "_").replace(":", "_")
             out_csv = RESULTS_DIR / f"{safe_name}_pii_benchmark_results.csv"
-            save_processed_results(result_df, None, str(out_csv), extra_info=meta)
+            save_processed_results(
+                result_df,
+                None,
+                str(out_csv),
+                extra_info=meta,
+                append=append_results,
+            )
             print(
                 f"  TPR={meta.get('tpr', 0):.4f} | FPR={meta.get('fpr', 0):.4f} | "
                 f"Latency(avg)={meta.get('overhead_latency_ms_avg', 0):.2f}ms | "
@@ -1672,7 +1737,12 @@ def main(
             )
             print(f"  結果已存: {out_csv}")
         except Exception as e:
+            model_finished_at = datetime.now().isoformat(timespec="seconds")
             error_meta = {
+                "run_id": run_id,
+                "experiment_started_at": experiment_started_at,
+                "model_started_at": model_started_at,
+                "model_finished_at": model_finished_at,
                 "model_id": spec.model_id,
                 "provider": spec.provider,
                 "status": "failed",
@@ -1691,7 +1761,7 @@ def main(
             ).reset_index(drop=True)
 
     compare_path = RESULTS_DIR / "pii_benchmark_comparison.csv"
-    compare_df.to_csv(compare_path, index=False, encoding="utf-8")
+    _save_dataframe_csv(compare_df, compare_path, append=append_results)
 
     print(f"\\n比較表已存: {compare_path}")
     if not compare_df.empty:
@@ -1744,6 +1814,11 @@ if __name__ == "__main__":
         default=str(NON_PII_DATASET_PATH),
         help="non-PII CSV 路徑（預設 dataset/data_person_1000_non_pii_100.csv）",
     )
+    parser.add_argument(
+        "--append-results",
+        action="store_true",
+        help="結果改用 append 寫入既有 CSV（預設為覆寫）",
+    )
 
     args = parser.parse_args()
     model_ids = [m.strip() for m in args.models.split(",") if m.strip()] or None
@@ -1754,4 +1829,5 @@ if __name__ == "__main__":
         model_ids=model_ids,
         non_pii_dataset_path=Path(args.non_pii_dataset),
         models_config_path=Path(args.models_config),
+        append_results=args.append_results,
     )
