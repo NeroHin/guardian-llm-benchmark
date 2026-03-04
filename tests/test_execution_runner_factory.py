@@ -104,3 +104,13 @@ def test_resolve_hf_runtime_settings_honors_config() -> None:
     runtime_cpu = execution._resolve_hf_runtime_settings({}, cuda_available=False)
     assert runtime_cpu["torch_dtype_name"] == "float32"
     assert runtime_cpu["device_map"] is None
+
+
+def test_resolve_hf_runtime_settings_fallbacks_bf16_to_fp16_when_unsupported() -> None:
+    execution = _load_execution_module()
+    runtime = execution._resolve_hf_runtime_settings(
+        {"torch_dtype": "bfloat16"},
+        cuda_available=True,
+        bf16_available=False,
+    )
+    assert runtime["torch_dtype_name"] == "float16"
