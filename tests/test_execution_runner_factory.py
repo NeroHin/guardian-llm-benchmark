@@ -1,56 +1,36 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-from types import ModuleType
+import os
 
 import pytest
 
-
-def _load_execution_module() -> ModuleType:
-    root = Path(__file__).resolve().parents[1]
-    execution_path = root / "model-experiment" / "execution.py"
-    module_name = "execution_module_runner_factory_tests"
-    spec = importlib.util.spec_from_file_location(module_name, execution_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"無法載入模組: {execution_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+import benchmarking.runtime as runtime
 
 
 def test_create_runner_dispatches_by_provider(monkeypatch) -> None:
-    execution = _load_execution_module()
+    monkeypatch.setitem(runtime.RUNNER_FACTORIES, "openrouter", lambda spec: f"or:{spec.key}")
+    monkeypatch.setitem(runtime.RUNNER_FACTORIES, "huggingface", lambda spec: f"hf:{spec.key}")
+    monkeypatch.setitem(runtime.RUNNER_FACTORIES, "qwen_stream", lambda spec: f"qs:{spec.key}")
 
-    monkeypatch.setitem(execution.RUNNER_FACTORIES, "openrouter", lambda spec: f"or:{spec.key}")
-    monkeypatch.setitem(execution.RUNNER_FACTORIES, "huggingface", lambda spec: f"hf:{spec.key}")
-    monkeypatch.setitem(execution.RUNNER_FACTORIES, "qwen_stream", lambda spec: f"qs:{spec.key}")
+    s1 = runtime.ModelSpec(key="k1", model_id="m1", provider="openrouter")
+    s2 = runtime.ModelSpec(key="k2", model_id="m2", provider="huggingface")
+    s3 = runtime.ModelSpec(key="k3", model_id="m3", provider="qwen_stream")
 
-    s1 = execution.ModelSpec(key="k1", model_id="m1", provider="openrouter")
-    s2 = execution.ModelSpec(key="k2", model_id="m2", provider="huggingface")
-    s3 = execution.ModelSpec(key="k3", model_id="m3", provider="qwen_stream")
-
-    assert execution.create_runner(s1) == "or:k1"
-    assert execution.create_runner(s2) == "hf:k2"
-    assert execution.create_runner(s3) == "qs:k3"
+    assert runtime.create_runner(s1) == "or:k1"
+    assert runtime.create_runner(s2) == "hf:k2"
+    assert runtime.create_runner(s3) == "qs:k3"
 
 
 def test_create_runner_unknown_provider_raises() -> None:
-    execution = _load_execution_module()
-    spec = execution.ModelSpec(key="k", model_id="m", provider="unknown")
+    spec = runtime.ModelSpec(key="k", model_id="m", provider="unknown")
 
     with pytest.raises(ValueError) as exc:
-        execution.create_runner(spec)
+        runtime.create_runner(spec)
 
     assert "未知 provider" in str(exc.value)
 
 
 def test_create_huggingface_runner_uses_profile(monkeypatch) -> None:
-    execution = _load_execution_module()
-
     class DummyGranite:
         def __init__(self, spec):
             self.spec = spec
@@ -59,37 +39,35 @@ def test_create_huggingface_runner_uses_profile(monkeypatch) -> None:
         def __init__(self, spec):
             self.spec = spec
 
-    monkeypatch.setattr(execution, "GraniteHuggingFaceRunner", DummyGranite)
-    monkeypatch.setattr(execution, "QwenGuardStreamRunner", DummyQwen)
+    monkeypatch.setattr(runtime, "GraniteHuggingFaceRunner", DummyGranite)
+    monkeypatch.setattr(runtime, "QwenGuardStreamRunner", DummyQwen)
 
-    granite_spec = execution.ModelSpec(
+    granite_spec = runtime.ModelSpec(
         key="granite",
         model_id="ibm-granite/granite-4.0-h-micro",
         provider="huggingface",
         profile="granite_guard_json",
     )
-    qwen_spec = execution.ModelSpec(
+    qwen_spec = runtime.ModelSpec(
         key="qwen",
         model_id="Qwen/Qwen3Guard-Stream-4B",
         provider="huggingface",
         profile="qwen_stream",
     )
-    qwen_instruct_spec = execution.ModelSpec(
+    qwen_instruct_spec = runtime.ModelSpec(
         key="qwen-instruct",
         model_id="Qwen/Qwen2.5-0.5B-Instruct",
         provider="huggingface",
         profile="qwen_instruct_json",
     )
 
-    assert isinstance(execution._create_huggingface_runner(granite_spec), DummyGranite)
-    assert isinstance(execution._create_huggingface_runner(qwen_spec), DummyQwen)
-    assert isinstance(execution._create_huggingface_runner(qwen_instruct_spec), DummyGranite)
+    assert isinstance(runtime._create_huggingface_runner(granite_spec), DummyGranite)
+    assert isinstance(runtime._create_huggingface_runner(qwen_spec), DummyQwen)
+    assert isinstance(runtime._create_huggingface_runner(qwen_instruct_spec), DummyGranite)
 
 
 def test_resolve_hf_runtime_settings_honors_config() -> None:
-    execution = _load_execution_module()
-
-    runtime = execution._resolve_hf_runtime_settings(
+    resolved = runtime._resolve_hf_runtime_settings(
         {
             "trust_remote_code": False,
             "torch_dtype": "float16",
@@ -97,20 +75,80 @@ def test_resolve_hf_runtime_settings_honors_config() -> None:
         },
         cuda_available=True,
     )
-    assert runtime["trust_remote_code"] is False
-    assert runtime["torch_dtype_name"] == "float16"
-    assert runtime["device_map"] == "auto"
+    assert resolved["trust_remote_code"] is False
+    assert resolved["torch_dtype_name"] == "float16"
+    assert resolved["device_map"] == "auto"
 
-    runtime_cpu = execution._resolve_hf_runtime_settings({}, cuda_available=False)
+    runtime_cpu = runtime._resolve_hf_runtime_settings({}, cuda_available=False)
     assert runtime_cpu["torch_dtype_name"] == "float32"
     assert runtime_cpu["device_map"] is None
 
 
 def test_resolve_hf_runtime_settings_fallbacks_bf16_to_fp16_when_unsupported() -> None:
-    execution = _load_execution_module()
-    runtime = execution._resolve_hf_runtime_settings(
+    resolved = runtime._resolve_hf_runtime_settings(
         {"torch_dtype": "bfloat16"},
         cuda_available=True,
         bf16_available=False,
     )
-    assert runtime["torch_dtype_name"] == "float16"
+    assert resolved["torch_dtype_name"] == "float16"
+
+
+def test_configure_hf_xet_env_applies_expected_values(monkeypatch) -> None:
+    for key in (
+        "HF_XET_HIGH_PERFORMANCE",
+        "HF_XET_NUM_CONCURRENT_RANGE_GETS",
+        "HF_XET_RECONSTRUCT_WRITE_SEQUENTIALLY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    applied = runtime._configure_hf_xet_env(
+        {
+            "hf_xet": {
+                "enabled": True,
+                "high_performance": True,
+                "num_concurrent_range_gets": 48,
+                "reconstruct_write_sequentially": False,
+            }
+        }
+    )
+
+    assert os.environ["HF_XET_HIGH_PERFORMANCE"] == "1"
+    assert os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] == "48"
+    assert os.environ["HF_XET_RECONSTRUCT_WRITE_SEQUENTIALLY"] == "0"
+    assert applied["HF_XET_HIGH_PERFORMANCE"] == "1"
+    assert applied["HF_XET_NUM_CONCURRENT_RANGE_GETS"] == "48"
+    assert applied["HF_XET_RECONSTRUCT_WRITE_SEQUENTIALLY"] == "0"
+
+
+def test_configure_hf_xet_env_respects_existing_env_unless_override(monkeypatch) -> None:
+    monkeypatch.setenv("HF_XET_HIGH_PERFORMANCE", "0")
+    monkeypatch.setenv("HF_XET_NUM_CONCURRENT_RANGE_GETS", "16")
+
+    applied_without_override = runtime._configure_hf_xet_env(
+        {
+            "hf_xet": {
+                "enabled": True,
+                "high_performance": True,
+                "num_concurrent_range_gets": 64,
+                "override_env": False,
+            }
+        }
+    )
+    assert os.environ["HF_XET_HIGH_PERFORMANCE"] == "0"
+    assert os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] == "16"
+    assert applied_without_override == {}
+
+    applied_with_override = runtime._configure_hf_xet_env(
+        {
+            "hf_xet": {
+                "enabled": True,
+                "high_performance": True,
+                "num_concurrent_range_gets": 64,
+                "override_env": True,
+            }
+        }
+    )
+    assert os.environ["HF_XET_HIGH_PERFORMANCE"] == "1"
+    assert os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] == "64"
+    assert applied_with_override["HF_XET_HIGH_PERFORMANCE"] == "1"
+    assert applied_with_override["HF_XET_NUM_CONCURRENT_RANGE_GETS"] == "64"
