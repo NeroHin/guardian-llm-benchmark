@@ -1,0 +1,30 @@
+version: 1
+datasets:
+  - key: multipriv_pii_positive
+    task: pii_binary
+    format: csv
+    path: dataset/data_person_1000_target.csv
+    content_column: naturalParagraph
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: multipriv_pii_negative
+    task: pii_binary
+    format: csv
+    path: dataset/data_person_1000_non_pii_100.csv
+    content_column: naturalParagraph
+    ground_truth:
+      mode: fixed
+      value: false
+    filters:
+      - column: generation_status
+        equals: ok
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
