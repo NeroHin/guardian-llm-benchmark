@@ -16,7 +16,6 @@ from benchmarking.config import (
 )
 from benchmarking.datasets import build_eval_dataframe
 from benchmarking.reporting import (
-    write_benchmark_report,
     write_leaderboard_csv,
     write_metrics_json,
     write_rows_csv,
@@ -104,8 +103,6 @@ def run_benchmark(
                 raise
 
     leaderboard = write_leaderboard_csv(all_metrics, run_dir / "leaderboard.csv")
-    if benchmark.outputs.save_markdown_report:
-        write_benchmark_report(benchmark.key, leaderboard, run_dir / "report.md")
     write_run_manifest(
         {
             "benchmark_key": benchmark.key,
@@ -123,6 +120,7 @@ def run_benchmark(
             },
             "start_end_note": "Per-model timestamps are stored in metrics files.",
             "git_commit": _git_commit(),
+            "leaderboard_path": "leaderboard.csv",
             "failed_models": failures,
         },
         run_dir / "run_manifest.json",

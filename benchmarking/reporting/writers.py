@@ -33,20 +33,5 @@ def write_leaderboard_csv(rows: list[dict[str, Any]], path: Path) -> pd.DataFram
     df.to_csv(path, index=False, encoding="utf-8")
     return df
 
-
-def write_benchmark_report(
-    benchmark_key: str,
-    leaderboard: pd.DataFrame,
-    path: Path,
-) -> None:
-    _ensure_parent(path)
-    lines = [f"# Benchmark Report: {benchmark_key}", ""]
-    if leaderboard.empty:
-        lines.append("No benchmark results.")
-    else:
-        lines.append(leaderboard.to_markdown(index=False))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def write_run_manifest(payload: dict[str, Any], path: Path) -> None:
     write_metrics_json(payload, path)

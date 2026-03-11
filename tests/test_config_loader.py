@@ -13,7 +13,7 @@ from benchmarking.config.loader import (
 )
 
 
-def test_load_model_registry_reads_tags_and_params(tmp_path: Path) -> None:
+def test_load_model_registry_reads_params(tmp_path: Path) -> None:
     config = tmp_path / "models.yaml"
     config.write_text(
         """
@@ -23,7 +23,6 @@ models:
     model_id: vendor/model-a
     provider: huggingface
     params_b: 3.5
-    tags: [guardian, local]
     settings:
       max_new_tokens: 64
 """.strip(),
@@ -33,7 +32,6 @@ models:
     registry = load_model_registry(config)
 
     assert registry["model-a"].params_b == 3.5
-    assert registry["model-a"].tags == ("guardian", "local")
 
 
 def test_load_dataset_registry_supports_fixed_and_column_modes(tmp_path: Path) -> None:
@@ -128,7 +126,7 @@ datasets:
     assert "找不到 benchmark 指定 dataset" in str(exc.value)
 
 
-def test_resolve_model_selection_uses_keys_then_enabled_fallback(tmp_path: Path) -> None:
+def test_resolve_model_selection_uses_keys_then_all_models_fallback(tmp_path: Path) -> None:
     config = tmp_path / "models.yaml"
     config.write_text(
         """
@@ -137,12 +135,9 @@ models:
   - key: model-a
     model_id: vendor/model-a
     provider: huggingface
-    enabled: false
   - key: model-b
     model_id: vendor/model-b
     provider: openrouter
-    enabled: true
-    tags: [guardian]
 """.strip(),
         encoding="utf-8",
     )
@@ -189,7 +184,7 @@ benchmark:
     )
 
     assert [item.key for item in explicit] == ["model-a"]
-    assert [item.key for item in fallback] == ["model-b"]
+    assert [item.key for item in fallback] == ["model-a", "model-b"]
 
 
 def _write_benchmark(tmp_path: Path, content: str) -> Path:

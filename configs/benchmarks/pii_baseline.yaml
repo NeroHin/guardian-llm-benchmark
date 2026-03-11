@@ -7,10 +7,9 @@ benchmark:
     negative: multipriv_pii_negative
   models:
     include_keys:
-      - qwen3guard06b-stream
-      - granite-micro-hf
+      - gpt41nano-openrouter
   runtime:
-    sample_limit: 100
+    sample_limit: 5
     shuffle: true
     random_seed: 42
     fail_fast: false
@@ -18,4 +17,3 @@ benchmark:
     dir: results/pii-baseline
     save_rows: true
     save_metrics_json: true
-    save_markdown_report: true

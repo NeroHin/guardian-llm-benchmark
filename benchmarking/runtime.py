@@ -46,6 +46,7 @@ except Exception:  # pragma: no cover - tqdm is optional
         return _NoopTqdm(iterable=iterable, total=kwargs.get("total"))
 
 ROOT = Path(__file__).resolve().parent.parent
+from benchmarking.env import get_env
 from benchmarking.tasks import get_task_definition
 
 # =============================================================================
@@ -71,7 +72,7 @@ _OPENROUTER_PRICING_CACHE: dict[str, tuple[float, float]] | None = None
 
 
 def _qwen_debug_enabled() -> bool:
-    return os.getenv("GUARDIAN_BENCHMARK_QWEN_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+    return get_env("GUARDIAN_BENCHMARK_QWEN_DEBUG", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _append_qwen_debug(event: dict[str, Any]) -> None:
@@ -127,9 +128,7 @@ class ModelSpec:
     provider: str
     profile: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
-    enabled: bool = True
     params_b: float | None = None
-    tags: tuple[str, ...] = ()
 
 
 @dataclass
@@ -280,7 +279,7 @@ def _configure_hf_xet_env(settings: dict[str, Any]) -> dict[str, str]:
     applied: dict[str, str] = {}
 
     def _set_env(name: str, value: str) -> None:
-        existing = os.getenv(name)
+        existing = get_env(name)
         if existing not in (None, "") and not override_env:
             return
         os.environ[name] = value
@@ -618,7 +617,7 @@ class OpenRouterRunner:
         self.provider = "openrouter"
         self._settings = dict(spec.settings)
 
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        api_key = get_env("OPENROUTER_API_KEY")
         if not api_key:
             raise RuntimeError("找不到 OPENROUTER_API_KEY，請確認 .env 或環境變數")
 
@@ -626,8 +625,8 @@ class OpenRouterRunner:
         self._async_client = AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
 
         headers: dict[str, str] = {}
-        referer = os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("HTTP_REFERER")
-        title = os.getenv("OPENROUTER_TITLE") or os.getenv("X_OPENROUTER_TITLE")
+        referer = get_env("OPENROUTER_HTTP_REFERER") or get_env("HTTP_REFERER")
+        title = get_env("OPENROUTER_TITLE") or get_env("X_OPENROUTER_TITLE")
         if referer:
             headers["HTTP-Referer"] = referer
         if title:
@@ -635,7 +634,7 @@ class OpenRouterRunner:
         self._extra_headers = headers
         self._concurrency = max(
             1,
-            int(self._settings.get("concurrency") or os.getenv("OPENROUTER_CONCURRENCY", "5")),
+            int(self._settings.get("concurrency") or get_env("OPENROUTER_CONCURRENCY", "5")),
         )
 
         self._pricing = fetch_openrouter_pricing(api_key)

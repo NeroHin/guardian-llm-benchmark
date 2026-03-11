@@ -48,9 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="List available configs")
     list_parser.add_argument("target", choices=("models", "datasets", "benchmarks"))
 
-    report_parser = subparsers.add_parser("report", help="Print report location for an existing run")
-    report_parser.add_argument("--run-dir", required=True, type=Path)
-
     return parser
 
 
@@ -68,11 +65,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list":
         _list_configs(args.target)
         return 0
-    if args.command == "report":
-        report_path = args.run_dir / "report.md"
-        print(report_path)
-        return 0
-
     parser.error(f"未知指令: {args.command}")
     return 2
 
