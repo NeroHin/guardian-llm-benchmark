@@ -16,9 +16,7 @@ class ModelSpec:
     provider: str
     profile: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
-    enabled: bool = True
     params_b: float | None = None
-    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,7 +58,6 @@ class BenchmarkDatasetSelection:
 @dataclass(frozen=True)
 class ModelSelectionSpec:
     include_keys: tuple[str, ...] = ()
-    include_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,7 +73,6 @@ class BenchmarkOutputsSpec:
     dir: Path
     save_rows: bool = True
     save_metrics_json: bool = True
-    save_markdown_report: bool = True
 
 
 @dataclass(frozen=True)

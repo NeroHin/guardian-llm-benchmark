@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from dotenv import load_dotenv
 from openai import OpenAI
+
+from benchmarking.env import ensure_dotenv_loaded, get_env
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,13 +108,13 @@ def has_obvious_pii(text: str) -> bool:
 
 class NonPIIGenerator:
     def __init__(self, *, model_id: str, base_url: str | None = None) -> None:
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        api_key = get_env("OPENAI_API_KEY") or get_env("OPENROUTER_API_KEY")
         if not api_key:
             raise RuntimeError("找不到 OPENAI_API_KEY 或 OPENROUTER_API_KEY。")
 
         if base_url:
             resolved_base_url = base_url
-        elif os.getenv("OPENROUTER_API_KEY"):
+        elif get_env("OPENROUTER_API_KEY"):
             resolved_base_url = DEFAULT_OPENROUTER_BASE_URL
         else:
             resolved_base_url = None
@@ -121,8 +122,8 @@ class NonPIIGenerator:
         self.model_id = model_id
         self.client = OpenAI(api_key=api_key, base_url=resolved_base_url)
         self.extra_headers: dict[str, str] = {}
-        referer = os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("HTTP_REFERER")
-        title = os.getenv("OPENROUTER_TITLE") or os.getenv("X_OPENROUTER_TITLE")
+        referer = get_env("OPENROUTER_HTTP_REFERER") or get_env("HTTP_REFERER")
+        title = get_env("OPENROUTER_TITLE") or get_env("X_OPENROUTER_TITLE")
         if referer:
             self.extra_headers["HTTP-Referer"] = referer
         if title:
@@ -251,7 +252,7 @@ def generate_dataset(
 
 
 def main() -> None:
-    load_dotenv()
+    ensure_dotenv_loaded()
 
     parser = argparse.ArgumentParser(description="使用 OpenAI 產生 non-PII 文本資料")
     parser.add_argument("--input", type=str, default=str(DEFAULT_INPUT), help="來源 CSV 路徑")

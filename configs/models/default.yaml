@@ -3,9 +3,7 @@ models:
   - key: granite-openrouter
     model_id: ibm-granite/granite-4.0-h-micro
     provider: openrouter
-    enabled: false
     params_b: 3.0
-    tags: [guardian, api]
     settings:
       temperature: 0
       max_tokens: 128
@@ -14,8 +12,6 @@ models:
   - key: gpt41nano-openrouter
     model_id: openai/gpt-4.1-nano
     provider: openrouter
-    enabled: false
-    tags: [judge, api]
     settings:
       temperature: 0
       max_tokens: 128
@@ -24,10 +20,8 @@ models:
   - key: qwen3guard4b-stream
     model_id: Qwen/Qwen3Guard-Stream-4B
     provider: qwen_stream
-    enabled: false
     profile: qwen_stream
     params_b: 4.0
-    tags: [guardian, local, stream]
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -41,9 +35,7 @@ models:
   - key: qwen3guard06b-stream
     model_id: Qwen/Qwen3Guard-Stream-0.6B
     provider: qwen_stream
-    enabled: true
     profile: qwen_stream
-    tags: [guardian, local, stream]
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -57,10 +49,8 @@ models:
   - key: granite-micro-hf
     model_id: ibm-granite/granite-4.0-h-micro
     provider: huggingface
-    enabled: true
     profile: granite_guard_json
     params_b: 3.0
-    tags: [guardian, local]
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -75,10 +65,8 @@ models:
   - key: granite-tiny-hf-1b
     model_id: ibm-granite/granite-4.0-h-1b
     provider: huggingface
-    enabled: true
     profile: granite_guard_json
     params_b: 1.0
-    tags: [guardian, local]
     settings:
       trust_remote_code: true
       torch_dtype: float16
@@ -93,9 +81,7 @@ models:
   - key: qwen25-05b-hf
     model_id: Qwen/Qwen2.5-0.5B-Instruct
     provider: huggingface
-    enabled: false
     profile: qwen_instruct_json
-    tags: [baseline, local]
     settings:
       trust_remote_code: false
       torch_dtype: float16
@@ -112,9 +98,7 @@ models:
   - key: qwen25-3b-hf
     model_id: Qwen/Qwen2.5-3B-Instruct
     provider: huggingface
-    enabled: false
     profile: qwen_instruct_json
-    tags: [baseline, local]
     settings:
       trust_remote_code: false
       torch_dtype: auto

@@ -62,9 +62,6 @@ def load_model_registry(path_or_dir: Path = DEFAULT_MODELS_DIR) -> dict[str, Mod
                 raise ValueError(f"模型設定格式錯誤: {path} models[{idx}] 缺少 key/model_id/provider")
             if key in specs:
                 raise ValueError(f"模型設定重複 key: {key}")
-            tags_raw = item.get("tags") or []
-            if not isinstance(tags_raw, list):
-                raise ValueError(f"模型設定格式錯誤: {path} models[{idx}].tags 必須為 list")
             params_b = item.get("params_b")
             if params_b is not None:
                 params_b = float(params_b)
@@ -74,9 +71,7 @@ def load_model_registry(path_or_dir: Path = DEFAULT_MODELS_DIR) -> dict[str, Mod
                 provider=provider,
                 profile=item.get("profile"),
                 settings=dict(item.get("settings") or {}),
-                enabled=bool(item.get("enabled", True)),
                 params_b=params_b,
-                tags=tuple(str(tag) for tag in tags_raw),
             )
     return specs
 
@@ -189,8 +184,7 @@ def load_benchmark_spec(path: Path) -> BenchmarkSpec:
     if not isinstance(models_raw, dict):
         raise ValueError(f"benchmark 設定格式錯誤: {path} models 必須為 object")
     include_keys = tuple(str(item) for item in (models_raw.get("include_keys") or ()))
-    include_tags = tuple(str(item) for item in (models_raw.get("include_tags") or ()))
-    models = ModelSelectionSpec(include_keys=include_keys, include_tags=include_tags)
+    models = ModelSelectionSpec(include_keys=include_keys)
 
     runtime_raw = benchmark.get("runtime") or {}
     if runtime_raw and not isinstance(runtime_raw, dict):
@@ -212,7 +206,6 @@ def load_benchmark_spec(path: Path) -> BenchmarkSpec:
         dir=Path(output_dir),
         save_rows=bool(outputs_raw.get("save_rows", True)),
         save_metrics_json=bool(outputs_raw.get("save_metrics_json", True)),
-        save_markdown_report=bool(outputs_raw.get("save_markdown_report", True)),
     )
     return BenchmarkSpec(
         key=key,
@@ -240,17 +233,8 @@ def resolve_model_selection(
         selected.append(spec)
         seen.add(spec.key)
 
-    for spec in registry.values():
-        if not selection.include_tags:
-            continue
-        if spec.key in seen:
-            continue
-        if set(selection.include_tags).issubset(set(spec.tags)):
-            selected.append(spec)
-            seen.add(spec.key)
-
     if not selected:
-        selected = [spec for spec in registry.values() if spec.enabled]
+        selected = list(registry.values())
 
     if not selected:
         raise ValueError("沒有任何模型被選取")

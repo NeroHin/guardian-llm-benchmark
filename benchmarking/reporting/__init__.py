@@ -1,5 +1,4 @@
 from .writers import (
-    write_benchmark_report,
     write_leaderboard_csv,
     write_metrics_json,
     write_rows_csv,
@@ -7,7 +6,6 @@ from .writers import (
 )
 
 __all__ = [
-    "write_benchmark_report",
     "write_leaderboard_csv",
     "write_metrics_json",
     "write_rows_csv",

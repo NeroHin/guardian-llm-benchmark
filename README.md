@@ -68,9 +68,7 @@ configs/
 常用可選欄位：
 
 - `profile`
-- `enabled`
 - `params_b`
-- `tags`
 - `settings`
 
 範例：
@@ -81,10 +79,8 @@ models:
   - key: granite-micro-hf
     model_id: ibm-granite/granite-4.0-h-micro
     provider: huggingface
-    enabled: true
     profile: granite_guard_json
     params_b: 3.0
-    tags: [guardian, local]
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -184,7 +180,6 @@ benchmark:
     dir: results/pii-baseline
     save_rows: true
     save_metrics_json: true
-    save_markdown_report: true
 ```
 
 ## 4. CLI 使用方式
@@ -215,12 +210,6 @@ uv run guardian-benchmark run --benchmark configs/benchmarks/pii_baseline.yaml
 uv run guardian-benchmark run --benchmark configs/benchmarks/pii_baseline.yaml --no-progress
 ```
 
-查既有 run 的報告位置：
-
-```bash
-uv run guardian-benchmark report --run-dir results/pii-baseline/<run_id>
-```
-
 ## 5. 輸出內容
 
 每次 run 會輸出到：
@@ -230,7 +219,6 @@ results/<benchmark-key>/<run-id>/
   rows/<model-key>.csv
   metrics/<model-key>.json
   leaderboard.csv
-  report.md
   run_manifest.json
 ```
 
@@ -277,7 +265,7 @@ results/<benchmark-key>/<run-id>/
 1. 編輯 `configs/models/default.yaml`
 2. 新增一個 `models` block
 3. 填入 `key / model_id / provider`
-4. 視需要補 `profile / settings / tags / params_b`
+4. 視需要補 `profile / settings / params_b`
 
 ### 新增一個 dataset
 
