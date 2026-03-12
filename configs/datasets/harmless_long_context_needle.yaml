@@ -1,0 +1,144 @@
+version: 1
+datasets:
+  - key: harmless_long_context_1k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 1K_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_4k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 4k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_8k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 8k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_16k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 16k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_32k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 32k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_16k_needle_start_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 16k_needle_start_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_16k_needle_mid_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 16k_needle_mid_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_16k_needle_end_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 16k_needle_end_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_32k_needle_start_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 32k_needle_start_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_32k_needle_mid_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 32k_needle_mid_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_32k_needle_end_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_needle.csv
+    content_column: 32k_needle_end_context
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42

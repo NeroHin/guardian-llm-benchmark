@@ -1,0 +1,19 @@
+version: 1
+benchmark:
+  key: pii-long-context-1k-pair
+  task: pii_binary
+  dataset:
+    positive: harmless_long_context_pii_1k_positive
+    negative: harmless_long_context_pii_1k_negative
+  models:
+    include_keys:
+      - qwen3guard06b-stream
+  runtime:
+    sample_limit: 1
+    shuffle: true
+    random_seed: 42
+    fail_fast: false
+  outputs:
+    dir: results/pii-long-context-1k-pair
+    save_rows: true
+    save_metrics_json: true
