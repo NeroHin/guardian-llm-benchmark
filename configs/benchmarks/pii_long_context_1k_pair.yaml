@@ -9,7 +9,7 @@ benchmark:
     include_keys:
       - qwen3guard06b-stream
   runtime:
-    sample_limit: 1
+    sample_limit: 50
     shuffle: true
     random_seed: 42
     fail_fast: false

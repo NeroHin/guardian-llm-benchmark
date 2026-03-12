@@ -9,7 +9,7 @@ benchmark:
     include_keys:
       - gpt41nano-openrouter
   runtime:
-    sample_limit: 5
+    sample_limit: 50
     shuffle: true
     random_seed: 42
     fail_fast: false

@@ -172,7 +172,7 @@ benchmark:
       - qwen3guard06b-stream
       - granite-micro-hf
   runtime:
-    sample_limit: 100
+    sample_limit: 50
     shuffle: true
     random_seed: 42
     fail_fast: false
