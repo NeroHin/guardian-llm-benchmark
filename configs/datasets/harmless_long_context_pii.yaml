@@ -1,0 +1,131 @@
+version: 1
+datasets:
+  - key: harmless_long_context_pii_1k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 1K_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_4k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 4k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_8k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 8k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_16k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 16k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_32k_negative
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 32k_context
+    ground_truth:
+      mode: fixed
+      value: false
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_1k_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 1K_context_with_pii
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_4k_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 4k_context_with_pii
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_8k_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 8k_context_with_pii
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_16k_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 16k_context_with_pii
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42
+
+  - key: harmless_long_context_pii_32k_positive
+    task: pii_binary
+    format: csv
+    path: dataset/harmless_long_context_pii.csv
+    content_column: 32k_context_with_pii
+    ground_truth:
+      mode: fixed
+      value: true
+    sample:
+      default_limit: 100
+      shuffle: false
+      random_seed: 42

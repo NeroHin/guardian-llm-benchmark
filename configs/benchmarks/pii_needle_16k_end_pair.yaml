@@ -1,0 +1,19 @@
+version: 1
+benchmark:
+  key: pii-needle-16k-end-pair
+  task: pii_binary
+  dataset:
+    positive: harmless_long_context_16k_needle_end_positive
+    negative: harmless_long_context_16k_negative
+  models:
+    include_keys:
+      - gpt41nano-openrouter
+  runtime:
+    sample_limit: 100
+    shuffle: true
+    random_seed: 42
+    fail_fast: false
+  outputs:
+    dir: results/pii-needle-16k-end-pair
+    save_rows: true
+    save_metrics_json: true

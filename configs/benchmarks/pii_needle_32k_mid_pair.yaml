@@ -1,0 +1,19 @@
+version: 1
+benchmark:
+  key: pii-needle-32k-mid-pair
+  task: pii_binary
+  dataset:
+    positive: harmless_long_context_32k_needle_mid_positive
+    negative: harmless_long_context_32k_negative
+  models:
+    include_keys:
+      - gpt41nano-openrouter
+  runtime:
+    sample_limit: 100
+    shuffle: true
+    random_seed: 42
+    fail_fast: false
+  outputs:
+    dir: results/pii-needle-32k-mid-pair
+    save_rows: true
+    save_metrics_json: true
