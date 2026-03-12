@@ -274,7 +274,7 @@ benchmark:
     )
 
     assert [item.key for item in explicit] == ["qwen-a-full-pass", "qwen-a-early-stop"]
-    assert explicit[0].settings["assistant_stream_simulation"] is False
+    assert explicit[0].settings["assistant_stream_simulation"] is True
     assert explicit[1].settings["assistant_stream_simulation"] is True
     assert [item.key for item in fallback] == ["qwen-a-full-pass", "qwen-a-early-stop", "model-b"]
 

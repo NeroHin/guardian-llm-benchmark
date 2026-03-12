@@ -145,6 +145,8 @@ class InferenceResult:
     fallback_reason: str | None = None
     processed_tokens: int | None = None
     total_tokens: int | None = None
+    setup_tokens: int | None = None
+    moderated_tokens: int | None = None
 
 
 class ModelRunner(Protocol):
@@ -561,6 +563,45 @@ def compute_latency_breakdown_metrics(
         if not full_pass_series.empty
         else 0.0,
         "full_pass_count": int(len(full_pass_values)),
+    }
+
+
+def compute_token_efficiency_metrics(
+    processed_tokens: list[int | None],
+    total_tokens: list[int | None],
+    setup_tokens: list[int | None],
+    moderated_tokens: list[int | None],
+) -> dict[str, Any]:
+    if not (
+        len(processed_tokens)
+        == len(total_tokens)
+        == len(setup_tokens)
+        == len(moderated_tokens)
+    ):
+        raise ValueError("token efficiency 輸入長度不一致")
+
+    processed_values = [int(v) if v is not None else 0 for v in processed_tokens]
+    total_values = [int(v) if v is not None else 0 for v in total_tokens]
+    setup_values = [int(v) if v is not None else 0 for v in setup_tokens]
+    moderated_values = [int(v) if v is not None else 0 for v in moderated_tokens]
+
+    content_total_tokens = sum(total_values)
+    content_processed_tokens = sum(processed_values)
+    setup_total_tokens = sum(setup_values)
+    moderated_total_tokens = sum(moderated_values)
+
+    content_token_reduction_rate = (
+        1.0 - (content_processed_tokens / content_total_tokens)
+        if content_total_tokens
+        else 0.0
+    )
+
+    return {
+        "content_tokens_total": content_total_tokens,
+        "content_processed_tokens_total": content_processed_tokens,
+        "setup_tokens_total": setup_total_tokens,
+        "moderated_tokens_total": moderated_total_tokens,
+        "content_token_reduction_rate": round(content_token_reduction_rate, 4),
     }
 
 
@@ -1366,6 +1407,8 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         stream_state = None
         result: dict[str, Any] = {}
         processed_tokens = 0
+        setup_tokens = 0
+        moderated_tokens = 0
         early_stopped = False
         trigger_idx: int | None = None
         inferred_pii = False
@@ -1373,6 +1416,10 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         detection_latency_ms: float | None = None
         fallback_reason: str | None = None
         stream_mode = "token_by_token"
+        benchmark_mode = str(self._settings.get("benchmark_mode") or "").strip().lower()
+        should_early_stop = benchmark_mode != "full_pass"
+        saw_pii_category = False
+        first_hit_category: str | None = None
         token_count = int(token_ids.shape[0]) if len(token_ids.shape) > 0 else 0
         if assistant_token_ids is not None:
             token_count = int(assistant_token_ids.shape[0]) if len(assistant_token_ids.shape) > 0 else 0
@@ -1388,6 +1435,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         try:
             if use_assistant_stream and assistant_token_ids is not None:
                 # 官方 realtime 路徑：user turn 先 full pass，assistant 再逐 token 串流。
+                setup_tokens = int(token_ids.shape[0]) if len(token_ids.shape) > 0 else 0
                 user_started = time.perf_counter()
                 result, stream_state = self._model.stream_moderate_from_ids(
                     token_ids,
@@ -1421,21 +1469,26 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                         )
 
                     processed_tokens = i + 1
+                    moderated_tokens = setup_tokens + processed_tokens
                     step_category = self._last_item(result.get("category"))
                     if _contains_pii_category(step_category):
-                        early_stopped = True
-                        trigger_idx = i
-                        detection_latency_ms = (time.perf_counter() - predict_started) * 1000
-                        _append_qwen_debug(
-                            {
-                                "event": "assistant_stream_early_stop_triggered",
-                                "model_id": self.model_id,
-                                "token_index": i,
-                                "category": step_category,
-                                "detection_latency_ms": round(detection_latency_ms, 2),
-                            }
-                        )
-                        break
+                        saw_pii_category = True
+                        if first_hit_category is None:
+                            first_hit_category = step_category
+                            trigger_idx = i
+                            detection_latency_ms = (time.perf_counter() - predict_started) * 1000
+                        if should_early_stop:
+                            early_stopped = True
+                            _append_qwen_debug(
+                                {
+                                    "event": "assistant_stream_early_stop_triggered",
+                                    "model_id": self.model_id,
+                                    "token_index": i,
+                                    "category": step_category,
+                                    "detection_latency_ms": round(detection_latency_ms, 2),
+                                }
+                            )
+                            break
             else:
                 # 非 assistant 模式：優先走官方建議 user full pass。
                 official_started = time.perf_counter()
@@ -1447,6 +1500,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                     )
                     stream_mode = "user_full_pass_stream_api"
                     processed_tokens = token_count
+                    moderated_tokens = token_count
                     detection_latency_ms = (time.perf_counter() - predict_started) * 1000
                     _append_qwen_debug(
                         {
@@ -1520,6 +1574,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                                 }
                             )
                             processed_tokens = token_count
+                            moderated_tokens = token_count
                             break
                         _append_qwen_debug(
                             {
@@ -1532,21 +1587,26 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                         raise RuntimeError(f"stream token step failed at index={i}: {e}") from e
 
                     processed_tokens = i + 1
+                    moderated_tokens = processed_tokens
                     step_category = self._last_item(result.get("category"))
                     if _contains_pii_category(step_category):
-                        early_stopped = True
-                        trigger_idx = i
-                        detection_latency_ms = (time.perf_counter() - predict_started) * 1000
-                        _append_qwen_debug(
-                            {
-                                "event": "early_stop_triggered_by_pii_category",
-                                "model_id": self.model_id,
-                                "token_index": i,
-                                "category": step_category,
-                                "detection_latency_ms": round(detection_latency_ms, 2),
-                            }
-                        )
-                        break
+                        saw_pii_category = True
+                        if first_hit_category is None:
+                            first_hit_category = step_category
+                            trigger_idx = i
+                            detection_latency_ms = (time.perf_counter() - predict_started) * 1000
+                        if should_early_stop:
+                            early_stopped = True
+                            _append_qwen_debug(
+                                {
+                                    "event": "early_stop_triggered_by_pii_category",
+                                    "model_id": self.model_id,
+                                    "token_index": i,
+                                    "category": step_category,
+                                    "detection_latency_ms": round(detection_latency_ms, 2),
+                                }
+                            )
+                            break
 
             # 防守式回補：若上方沒觸發，但序列中存在 PII，僅作推估標記。
             # 注意：這不代表真實 early stop，不應改寫 early_stopped。
@@ -1567,6 +1627,8 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                     )
                 elif processed_tokens == 0:
                     processed_tokens = token_count
+            if moderated_tokens == 0:
+                moderated_tokens = processed_tokens + setup_tokens
         finally:
             if stream_state is not None:
                 try:
@@ -1594,6 +1656,8 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         contains_pii = None
         if parsed_categories:
             contains_pii = _contains_pii_category(category, parsed_categories)
+        elif saw_pii_category:
+            contains_pii = True
         elif inferred_trigger_idx is not None:
             # 對 stream 輸出，優先採用序列級 category 判定，避免只看最後 token。
             contains_pii = True
@@ -1605,6 +1669,10 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             reason_parts.append(f"risk_level={risk_level}")
         if category:
             reason_parts.append(f"category={category}")
+        if saw_pii_category and first_hit_category:
+            reason_parts.append(f"stream_first_hit_category={first_hit_category}")
+        if trigger_idx is not None:
+            reason_parts.append(f"stream_first_hit_index={trigger_idx}")
         if parsed_refusal:
             reason_parts.append(f"refusal={parsed_refusal}")
 
@@ -1623,10 +1691,14 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                 "stream_mode": stream_mode,
                 "early_stopped": early_stopped,
                 "trigger_index": trigger_idx,
+                "stream_first_hit_category": first_hit_category,
+                "stream_detected_pii": saw_pii_category,
                 "inferred_pii": inferred_pii,
                 "inferred_trigger_index": inferred_trigger_idx,
+                "setup_tokens": setup_tokens,
                 "processed_tokens": processed_tokens,
                 "total_tokens": token_count,
+                "moderated_tokens": moderated_tokens,
                 "detection_latency_ms": round(detection_latency_ms, 2)
                 if detection_latency_ms is not None
                 else None,
@@ -1647,7 +1719,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             output_json=json.dumps(normalized, ensure_ascii=False),
             contains_pii=contains_pii,
             cost_usd=0.0,
-            prompt_tokens=int(token_ids.shape[0]),
+            prompt_tokens=moderated_tokens,
             completion_tokens=0,
             detection_latency_ms=detection_latency_ms,
             stream_mode=stream_mode,
@@ -1656,6 +1728,8 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             fallback_reason=fallback_reason,
             processed_tokens=processed_tokens,
             total_tokens=token_count,
+            setup_tokens=setup_tokens,
+            moderated_tokens=moderated_tokens,
         )
 
     def close(self) -> None:
@@ -1821,6 +1895,8 @@ def run_single_model(
     fallback_reasons: list[str | None] = []
     processed_tokens_list: list[int | None] = []
     total_tokens_list: list[int | None] = []
+    setup_tokens_list: list[int | None] = []
+    moderated_tokens_list: list[int | None] = []
     prompt_tokens_total = 0
     completion_tokens_total = 0
 
@@ -1875,6 +1951,8 @@ def run_single_model(
                 fallback_reasons.append(inference.fallback_reason)
                 processed_tokens_list.append(inference.processed_tokens)
                 total_tokens_list.append(inference.total_tokens)
+                setup_tokens_list.append(inference.setup_tokens)
+                moderated_tokens_list.append(inference.moderated_tokens)
                 prompt_tokens_total += inference.prompt_tokens
                 completion_tokens_total += inference.completion_tokens
         else:
@@ -1911,6 +1989,8 @@ def run_single_model(
                 fallback_reasons.append(inference.fallback_reason)
                 processed_tokens_list.append(inference.processed_tokens)
                 total_tokens_list.append(inference.total_tokens)
+                setup_tokens_list.append(inference.setup_tokens)
+                moderated_tokens_list.append(inference.moderated_tokens)
                 prompt_tokens_total += inference.prompt_tokens
                 completion_tokens_total += inference.completion_tokens
     finally:
@@ -1961,6 +2041,12 @@ def run_single_model(
     result_df["total_tokens"] = [
         int(v) if v is not None else 0 for v in total_tokens_list
     ]
+    result_df["setup_tokens"] = [
+        int(v) if v is not None else 0 for v in setup_tokens_list
+    ]
+    result_df["moderated_tokens"] = [
+        int(v) if v is not None else 0 for v in moderated_tokens_list
+    ]
 
     truths = [bool(v) for v in df[ground_truth_column].tolist()]
     resolved_preds = [bool(v) if v is not None else False for v in predictions]
@@ -1975,6 +2061,12 @@ def run_single_model(
         truths,
         latencies_ms,
         detection_latencies_ms,
+    )
+    token_efficiency = compute_token_efficiency_metrics(
+        processed_tokens_list,
+        total_tokens_list,
+        setup_tokens_list,
+        moderated_tokens_list,
     )
     result_df["ttd_ms"] = [
         (
@@ -2005,6 +2097,7 @@ def run_single_model(
         "completion_tokens_total": completion_tokens_total,
         **guard_metrics,
         **latency_breakdown,
+        **token_efficiency,
         "stream_rows": stream_rows,
         "stream_fallback_count": fallback_rows,
         "stream_fallback_rate": round(stream_fallback_rate, 4),
