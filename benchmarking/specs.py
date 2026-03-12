@@ -50,9 +50,9 @@ class DatasetSpec:
 
 @dataclass(frozen=True)
 class BenchmarkDatasetSelection:
-    positive: str | None = None
-    negative: str | None = None
-    source: str | None = None
+    positive: tuple[str, ...] = ()
+    negative: tuple[str, ...] = ()
+    source: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

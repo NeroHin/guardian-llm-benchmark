@@ -108,9 +108,9 @@ def run_benchmark(
             "benchmark_key": benchmark.key,
             "task": benchmark.task,
             "dataset": {
-                "positive": benchmark.dataset.positive,
-                "negative": benchmark.dataset.negative,
-                "source": benchmark.dataset.source,
+                "positive": list(benchmark.dataset.positive),
+                "negative": list(benchmark.dataset.negative),
+                "source": list(benchmark.dataset.source),
             },
             "models": [model.key for model in selected_models],
             "config_snapshot": {

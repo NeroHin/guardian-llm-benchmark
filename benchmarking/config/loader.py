@@ -24,6 +24,28 @@ DEFAULT_DATASETS_DIR = ROOT / "configs" / "datasets"
 DEFAULT_BENCHMARKS_DIR = ROOT / "configs" / "benchmarks"
 
 
+def _normalize_dataset_refs(raw: Any, *, path: Path, field_name: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            raise ValueError(f"benchmark 設定格式錯誤: {path} dataset.{field_name} 不可為空字串")
+        return (value,)
+    if isinstance(raw, list):
+        values: list[str] = []
+        for idx, item in enumerate(raw):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(
+                    f"benchmark 設定格式錯誤: {path} dataset.{field_name}[{idx}] 必須為非空字串"
+                )
+            values.append(item.strip())
+        if not values:
+            raise ValueError(f"benchmark 設定格式錯誤: {path} dataset.{field_name} 不可為空清單")
+        return tuple(values)
+    raise ValueError(f"benchmark 設定格式錯誤: {path} dataset.{field_name} 必須為字串或字串清單")
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
@@ -175,9 +197,9 @@ def load_benchmark_spec(path: Path) -> BenchmarkSpec:
     if not isinstance(dataset_raw, dict):
         raise ValueError(f"benchmark 設定格式錯誤: {path} dataset 必須為 object")
     dataset = BenchmarkDatasetSelection(
-        positive=dataset_raw.get("positive"),
-        negative=dataset_raw.get("negative"),
-        source=dataset_raw.get("source"),
+        positive=_normalize_dataset_refs(dataset_raw.get("positive"), path=path, field_name="positive"),
+        negative=_normalize_dataset_refs(dataset_raw.get("negative"), path=path, field_name="negative"),
+        source=_normalize_dataset_refs(dataset_raw.get("source"), path=path, field_name="source"),
     )
 
     models_raw = benchmark.get("models") or {}
@@ -222,19 +244,50 @@ def resolve_model_selection(
     registry: dict[str, ModelSpec],
     selection: ModelSelectionSpec,
 ) -> list[ModelSpec]:
+    def expand(spec: ModelSpec) -> list[ModelSpec]:
+        if spec.provider != "qwen_stream":
+            return [spec]
+
+        base_settings = dict(spec.settings)
+        return [
+            ModelSpec(
+                key=f"{spec.key}-full-pass",
+                model_id=spec.model_id,
+                provider=spec.provider,
+                profile=spec.profile,
+                settings={
+                    **base_settings,
+                    "assistant_stream_simulation": False,
+                    "benchmark_mode": "full_pass",
+                },
+                params_b=spec.params_b,
+            ),
+            ModelSpec(
+                key=f"{spec.key}-early-stop",
+                model_id=spec.model_id,
+                provider=spec.provider,
+                profile=spec.profile,
+                settings={
+                    **base_settings,
+                    "assistant_stream_simulation": True,
+                    "benchmark_mode": "early_stop",
+                },
+                params_b=spec.params_b,
+            ),
+        ]
+
     selected: list[ModelSpec] = []
-    seen: set[str] = set()
 
     for key in selection.include_keys:
         try:
             spec = registry[key]
         except KeyError as exc:
             raise ValueError(f"找不到 benchmark 指定模型: {key}") from exc
-        selected.append(spec)
-        seen.add(spec.key)
+        selected.extend(expand(spec))
 
     if not selected:
-        selected = list(registry.values())
+        for spec in registry.values():
+            selected.extend(expand(spec))
 
     if not selected:
         raise ValueError("沒有任何模型被選取")
@@ -255,7 +308,7 @@ def validate_benchmark_spec(
     if has_split == has_source:
         raise ValueError("benchmark.dataset 必須擇一使用 positive/negative 或 source")
 
-    refs = [ref for ref in (dataset.positive, dataset.negative, dataset.source) if ref]
+    refs = [*dataset.positive, *dataset.negative, *dataset.source]
     for ref in refs:
         if ref not in dataset_registry:
             raise ValueError(f"找不到 benchmark 指定 dataset: {ref}")
