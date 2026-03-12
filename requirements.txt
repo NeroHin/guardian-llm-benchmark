@@ -5,8 +5,12 @@ openai>=1.0.0
 python-dotenv>=1.0.0
 transformers>=4.56.1,<5.0.0
 huggingface_hub>=0.32.0
-torch>=2.5.1
+torch==2.5.1
 accelerate>=1.12.0
 numpy>=2.2.6
 pyyaml>=6.0
 tqdm>=4.66.0
+
+# ABI-specific Granite 4 / SSM companion installs:
+#   FALSE: pip install -r requirements-granite-ssm-cxx11abi-false.txt
+#   TRUE:  pip install -r requirements-granite-ssm-cxx11abi-true.txt
