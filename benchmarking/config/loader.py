@@ -257,7 +257,7 @@ def resolve_model_selection(
                 profile=spec.profile,
                 settings={
                     **base_settings,
-                    "assistant_stream_simulation": False,
+                    "assistant_stream_simulation": True,
                     "benchmark_mode": "full_pass",
                 },
                 params_b=spec.params_b,

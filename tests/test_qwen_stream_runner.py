@@ -125,6 +125,7 @@ def _build_runner(execution, *, assistant_stream_simulation: bool):
 
 def test_qwen_stream_predict_uses_assistant_stream_simulation() -> None:
     runner = _build_runner(runtime, assistant_stream_simulation=True)
+    runner._settings["benchmark_mode"] = "early_stop"
 
     inference = runner.predict("我的身分證字號是A123456789")
     parsed = PIIBinaryStrictJSONParser().parse(inference.output_json)
@@ -137,6 +138,8 @@ def test_qwen_stream_predict_uses_assistant_stream_simulation() -> None:
     assert inference.fallback_used is False
     assert inference.processed_tokens == 3
     assert inference.total_tokens == 4
+    assert inference.setup_tokens == 5
+    assert inference.moderated_tokens == 8
     assert inference.detection_latency_ms is not None
     assert parsed["parse_status"] == "parsed"
     assert parsed["contains_pii"] is True
@@ -167,6 +170,26 @@ def test_qwen_stream_predict_defaults_to_user_full_pass() -> None:
     assert inference.total_tokens == 4
     assert [role for role, _ in runner._model.calls] == ["user"]
     assert runner._model.closed_states[-1] == {"assistant_step": 0}
+
+
+def test_qwen_stream_full_pass_uses_same_assistant_stream_path_without_early_stop() -> None:
+    runner = _build_runner(runtime, assistant_stream_simulation=True)
+    runner._settings["benchmark_mode"] = "full_pass"
+
+    inference = runner.predict("我的身分證字號是A123456789")
+    payload = json.loads(inference.output_json)
+    inner = json.loads(payload["raw_text"])
+
+    assert inference.stream_mode == "assistant_token_stream_api"
+    assert inference.early_stopped is False
+    assert inference.contains_pii is True
+    assert inference.processed_tokens == 4
+    assert inference.total_tokens == 4
+    assert inference.setup_tokens == 5
+    assert inference.moderated_tokens == 9
+    assert inner["stream_detected_pii"] is True
+    assert inner["stream_first_hit_category"] == "PII"
+    assert [role for role, _ in runner._model.calls] == ["user", "assistant", "assistant", "assistant", "assistant"]
 
 
 def test_qwen_stream_predict_defaults_to_assistant_stream_when_setting_missing() -> None:
