@@ -89,6 +89,34 @@ def _sample_df(
     return result
 
 
+def _load_selected_datasets(
+    dataset_keys: tuple[str, ...],
+    dataset_registry: dict[str, DatasetSpec],
+    *,
+    root: Path,
+    runtime_limit: int | None,
+    runtime_shuffle: bool,
+    runtime_seed: int,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for key in dataset_keys:
+        spec = dataset_registry[key]
+        frame = load_dataset_frame(spec, root=root)
+        frame = _sample_df(
+            frame,
+            limit=runtime_limit or spec.default_limit,
+            shuffle=runtime_shuffle or spec.shuffle,
+            random_seed=runtime_seed if runtime_shuffle else spec.random_seed,
+        )
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=["content", "source_dataset_key", "ground_truth", "sample_type"])
+    merged = pd.concat(frames, ignore_index=True)
+    if runtime_shuffle:
+        merged = merged.sample(frac=1.0, random_state=runtime_seed).reset_index(drop=True)
+    return merged
+
+
 def build_eval_dataframe(
     benchmark: BenchmarkSpec,
     dataset_registry: dict[str, DatasetSpec],
@@ -100,32 +128,30 @@ def build_eval_dataframe(
     runtime_seed = benchmark.runtime.random_seed
 
     if benchmark.dataset.source:
-        spec = dataset_registry[benchmark.dataset.source]
-        df = load_dataset_frame(spec, root=root)
-        return _sample_df(
-            df,
-            limit=runtime_limit or spec.default_limit,
-            shuffle=runtime_shuffle or spec.shuffle,
-            random_seed=runtime_seed if runtime_shuffle else spec.random_seed,
+        return _load_selected_datasets(
+            benchmark.dataset.source,
+            dataset_registry,
+            root=root,
+            runtime_limit=runtime_limit,
+            runtime_shuffle=runtime_shuffle,
+            runtime_seed=runtime_seed,
         )
 
-    positive_spec = dataset_registry[benchmark.dataset.positive or ""]
-    negative_spec = dataset_registry[benchmark.dataset.negative or ""]
-    positive_df = load_dataset_frame(positive_spec, root=root)
-    negative_df = load_dataset_frame(negative_spec, root=root)
-    positive_limit = runtime_limit or positive_spec.default_limit
-    negative_limit = runtime_limit or negative_spec.default_limit
-    positive_df = _sample_df(
-        positive_df,
-        limit=positive_limit,
-        shuffle=runtime_shuffle or positive_spec.shuffle,
-        random_seed=runtime_seed if runtime_shuffle else positive_spec.random_seed,
+    positive_df = _load_selected_datasets(
+        benchmark.dataset.positive,
+        dataset_registry,
+        root=root,
+        runtime_limit=runtime_limit,
+        runtime_shuffle=runtime_shuffle,
+        runtime_seed=runtime_seed,
     )
-    negative_df = _sample_df(
-        negative_df,
-        limit=negative_limit,
-        shuffle=runtime_shuffle or negative_spec.shuffle,
-        random_seed=runtime_seed if runtime_shuffle else negative_spec.random_seed,
+    negative_df = _load_selected_datasets(
+        benchmark.dataset.negative,
+        dataset_registry,
+        root=root,
+        runtime_limit=runtime_limit,
+        runtime_shuffle=runtime_shuffle,
+        runtime_seed=runtime_seed,
     )
     merged = pd.concat([positive_df, negative_df], ignore_index=True)
     if runtime_shuffle:

@@ -1111,6 +1111,20 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             return str(value[-1]) if value else ""
         return str(value) if value is not None else ""
 
+    @staticmethod
+    def _last_float(value: Any) -> float | None:
+        if isinstance(value, list):
+            if not value:
+                return None
+            value = value[-1]
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return min(1.0, max(0.0, parsed))
+
     def _stream_moderate_single_token(
         self,
         token_ids: Any,
@@ -1280,9 +1294,41 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
 
         user_turn_ids = token_ids[: user_end_index + 1]
         assistant_turn_ids = token_ids[user_end_index + 1 :]
+        assistant_turn_ids = self._trim_assistant_prefix_tokens(assistant_turn_ids)
         if int(assistant_turn_ids.shape[0]) <= 0:
             raise RuntimeError("assistant_stream_simulation 找不到 assistant token 序列")
         return user_turn_ids, assistant_turn_ids
+
+    def _trim_assistant_prefix_tokens(self, assistant_turn_ids: Any) -> Any:
+        """
+        去除 assistant chat template 前綴，避免把 <|im_start|>assistant、<think> 等控制 token
+        當作正文內容做 stream moderation，造成固定位置誤觸發。
+        """
+        if not hasattr(assistant_turn_ids, "tolist"):
+            return assistant_turn_ids
+
+        token_ids = assistant_turn_ids.tolist()
+        if not token_ids:
+            return assistant_turn_ids
+
+        think_end_id = self._tokenizer.convert_tokens_to_ids("</think>")
+        start_index = 0
+        if think_end_id is not None and think_end_id in token_ids:
+            start_index = token_ids.index(think_end_id) + 1
+
+        while start_index < len(token_ids):
+            token_id = token_ids[start_index]
+            try:
+                token_text = self._tokenizer.decode([token_id], skip_special_tokens=False)
+            except Exception:
+                break
+            if token_text.strip():
+                break
+            start_index += 1
+
+        if start_index <= 0:
+            return assistant_turn_ids
+        return assistant_turn_ids[start_index:]
 
     def predict(self, content: str) -> InferenceResult:
         predict_started = time.perf_counter()
@@ -1529,7 +1575,9 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                     pass
 
         risk_level = self._last_item(result.get("risk_level"))
+        risk_prob = self._last_float(result.get("risk_prob"))
         category = self._last_item(result.get("category"))
+        category_prob = self._last_float(result.get("category_prob"))
         text_output = self._last_item(result.get("content"))
 
         # 兼容 Qwen 文字回傳格式（Safety/Category/Refusal）
@@ -1560,10 +1608,16 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         if parsed_refusal:
             reason_parts.append(f"refusal={parsed_refusal}")
 
+        confidence = category_prob
+        if confidence is None:
+            confidence = risk_prob
+
         raw_text = json.dumps(
             {
                 "risk_level": risk_level,
+                "risk_prob": risk_prob,
                 "category": category,
+                "category_prob": category_prob,
                 "refusal": parsed_refusal,
                 "text_output": text_output,
                 "stream_mode": stream_mode,
@@ -1584,7 +1638,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
         normalized = {
             "contains_pii": contains_pii,
             "label": "是" if contains_pii is True else "否" if contains_pii is False else "無法解析",
-            "confidence": None,
+            "confidence": confidence,
             "reason": "; ".join(reason_parts),
             "raw_text": raw_text,
         }
