@@ -7,7 +7,14 @@ benchmark:
     negative: harmless_long_context_pii_1k_negative
   models:
     include_keys:
+      - granite-openrouter
+      - gpt41nano-openrouter
+      - qwen3guard4b-stream
       - qwen3guard06b-stream
+      - granite-micro-hf
+      - granite-tiny-hf-1b
+      - qwen25-05b-hf
+      - qwen25-3b-hf
   runtime:
     sample_limit: 50
     shuffle: true
