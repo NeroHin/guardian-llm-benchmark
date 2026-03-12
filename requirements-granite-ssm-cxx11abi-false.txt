@@ -1,3 +1,8 @@
+--index-url https://download.pytorch.org/whl/cu118
+--extra-index-url https://pypi.org/simple
 -r requirements.txt
+torch==2.5.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
+torchvision==0.20.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
+torchaudio==2.5.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
 mamba-ssm @ https://github.com/state-spaces/mamba/releases/download/v2.3.0/mamba_ssm-2.3.0+cu11torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
 causal-conv1d @ https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.6.0/causal_conv1d-1.6.0+cu11torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
