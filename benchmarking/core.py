@@ -28,6 +28,11 @@ from benchmarking.tasks import get_task_definition
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _benchmark_mode(model_spec: Any) -> str:
+    settings = getattr(model_spec, "settings", {}) or {}
+    return str(settings.get("benchmark_mode") or "default")
+
+
 def _git_commit() -> str | None:
     try:
         result = subprocess.run(
@@ -81,6 +86,7 @@ def run_benchmark(
                 "status": "ok",
                 "task": task.task_id,
                 "benchmark_key": benchmark.key,
+                "benchmark_mode": _benchmark_mode(model_spec),
                 "model_started_at": started_at,
                 "model_finished_at": finished_at,
             }
@@ -94,6 +100,7 @@ def run_benchmark(
                 "model_key": model_spec.key,
                 "model_id": model_spec.model_id,
                 "provider": model_spec.provider,
+                "benchmark_mode": _benchmark_mode(model_spec),
                 "status": "failed",
                 "error": str(exc),
             }
@@ -113,6 +120,15 @@ def run_benchmark(
                 "source": list(benchmark.dataset.source),
             },
             "models": [model.key for model in selected_models],
+            "model_runs": [
+                {
+                    "model_key": model.key,
+                    "model_id": model.model_id,
+                    "provider": model.provider,
+                    "benchmark_mode": _benchmark_mode(model),
+                }
+                for model in selected_models
+            ],
             "config_snapshot": {
                 "benchmark": str(benchmark.source_path),
                 "models_dir": str(DEFAULT_MODELS_DIR),
