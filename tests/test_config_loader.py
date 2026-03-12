@@ -126,6 +126,31 @@ datasets:
     assert "找不到 benchmark 指定 dataset" in str(exc.value)
 
 
+def test_load_benchmark_spec_supports_dataset_lists(tmp_path: Path) -> None:
+    benchmark = load_benchmark_spec(
+        _write_benchmark(
+            tmp_path,
+            """
+version: 1
+benchmark:
+  key: pii-long-context
+  task: pii_binary
+  dataset:
+    positive: [positive-a, positive-b]
+    negative: [negative-a, negative-b]
+  models:
+    include_keys: [model-a]
+  outputs:
+    dir: results/pii-long-context
+""",
+        )
+    )
+
+    assert benchmark.dataset.positive == ("positive-a", "positive-b")
+    assert benchmark.dataset.negative == ("negative-a", "negative-b")
+    assert benchmark.dataset.source == ()
+
+
 def test_resolve_model_selection_uses_keys_then_all_models_fallback(tmp_path: Path) -> None:
     config = tmp_path / "models.yaml"
     config.write_text(
@@ -185,6 +210,73 @@ benchmark:
 
     assert [item.key for item in explicit] == ["model-a"]
     assert [item.key for item in fallback] == ["model-a", "model-b"]
+
+
+def test_resolve_model_selection_expands_qwen_stream_into_full_pass_and_early_stop(tmp_path: Path) -> None:
+    config = tmp_path / "models.yaml"
+    config.write_text(
+        """
+version: 1
+models:
+  - key: qwen-a
+    model_id: vendor/qwen-a
+    provider: qwen_stream
+    settings:
+      assistant_stream_simulation: true
+      assistant_stream_max_tokens: 128
+  - key: model-b
+    model_id: vendor/model-b
+    provider: huggingface
+""".strip(),
+        encoding="utf-8",
+    )
+
+    registry = load_model_registry(config)
+
+    explicit = resolve_model_selection(
+        registry,
+        load_benchmark_spec(
+            _write_benchmark(
+                tmp_path,
+                """
+version: 1
+benchmark:
+  key: pii-baseline
+  task: pii_binary
+  dataset:
+    source: pii-source
+  models:
+    include_keys: [qwen-a]
+  outputs:
+    dir: results/pii-baseline
+""",
+            )
+        ).models,
+    )
+    fallback = resolve_model_selection(
+        registry,
+        load_benchmark_spec(
+            _write_benchmark(
+                tmp_path,
+                """
+version: 1
+benchmark:
+  key: pii-baseline
+  task: pii_binary
+  dataset:
+    source: pii-source
+  models: {}
+  outputs:
+    dir: results/pii-baseline
+""",
+            )
+        ).models,
+    )
+
+    assert [item.key for item in explicit] == ["qwen-a-full-pass", "qwen-a-early-stop"]
+    assert explicit[0].settings["assistant_stream_simulation"] is False
+    assert explicit[1].settings["assistant_stream_simulation"] is True
+    assert [item.key for item in fallback] == ["qwen-a-full-pass", "qwen-a-early-stop", "model-b"]
 
 
 def _write_benchmark(tmp_path: Path, content: str) -> Path:

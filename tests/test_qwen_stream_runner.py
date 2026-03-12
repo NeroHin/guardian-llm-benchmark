@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 import torch
 
 import benchmarking.runtime as runtime
+from benchmarking.tasks.pii_binary.output_parser import PIIBinaryStrictJSONParser
 
 
 class FakeTokenizer:
@@ -11,6 +14,7 @@ class FakeTokenizer:
             "<|im_start|>": 1001,
             "user": 1002,
             "<|im_end|>": 1003,
+            "</think>": 1004,
         }
 
     def apply_chat_template(
@@ -33,7 +37,7 @@ class FakeTokenizer:
             input_ids = torch.tensor([[11, 12, 13, 14]], dtype=torch.long)
         elif text == "USER_ASSISTANT":
             input_ids = torch.tensor(
-                [[1001, 1002, 21, 22, 1003, 31, 32, 33, 34]],
+                [[1001, 1002, 21, 22, 1003, 41, 42, 1004, 43, 31, 32, 33, 34]],
                 dtype=torch.long,
             )
         else:
@@ -42,6 +46,16 @@ class FakeTokenizer:
 
     def convert_tokens_to_ids(self, token: str) -> int | None:
         return self._token_map.get(token)
+
+    def decode(self, ids, skip_special_tokens: bool = False) -> str:
+        if skip_special_tokens:
+            raise AssertionError("unexpected skip_special_tokens=True")
+        token_id = ids[0]
+        if token_id in {41, 42, 43}:
+            return "\n"
+        if token_id == 1004:
+            return "</think>"
+        return f"tok-{token_id}"
 
 
 class FakeStreamModel:
@@ -55,7 +69,9 @@ class FakeStreamModel:
             return (
                 {
                     "risk_level": ["Safe"],
+                    "risk_prob": [0.91],
                     "category": ["None"],
+                    "category_prob": [0.88],
                     "content": [""],
                 },
                 {"assistant_step": 0},
@@ -69,7 +85,9 @@ class FakeStreamModel:
             return (
                 {
                     "risk_level": ["Unsafe"],
+                    "risk_prob": [0.86],
                     "category": ["PII"],
+                    "category_prob": [0.97],
                     "content": [""],
                 },
                 next_state,
@@ -77,7 +95,9 @@ class FakeStreamModel:
         return (
             {
                 "risk_level": ["Safe"],
+                "risk_prob": [0.9],
                 "category": ["None"],
+                "category_prob": [0.85],
                 "content": [""],
             },
             next_state,
@@ -107,6 +127,9 @@ def test_qwen_stream_predict_uses_assistant_stream_simulation() -> None:
     runner = _build_runner(runtime, assistant_stream_simulation=True)
 
     inference = runner.predict("我的身分證字號是A123456789")
+    parsed = PIIBinaryStrictJSONParser().parse(inference.output_json)
+    payload = json.loads(inference.output_json)
+    inner = json.loads(payload["raw_text"])
 
     assert inference.stream_mode == "assistant_token_stream_api"
     assert inference.early_stopped is True
@@ -115,8 +138,20 @@ def test_qwen_stream_predict_uses_assistant_stream_simulation() -> None:
     assert inference.processed_tokens == 3
     assert inference.total_tokens == 4
     assert inference.detection_latency_ms is not None
+    assert parsed["parse_status"] == "parsed"
+    assert parsed["contains_pii"] is True
+    assert parsed["confidence"] == 0.97
+    assert inner["category_prob"] == 0.97
     assert [role for role, _ in runner._model.calls] == ["user", "assistant", "assistant", "assistant"]
     assert runner._model.closed_states[-1] == {"assistant_step": 3}
+
+
+def test_prepare_assistant_stream_tokens_strips_template_prefix() -> None:
+    runner = _build_runner(runtime, assistant_stream_simulation=True)
+
+    _, assistant_ids = runner._prepare_assistant_stream_tokens("測試內容")
+
+    assert assistant_ids.tolist() == [31, 32, 33, 34]
 
 
 def test_qwen_stream_predict_defaults_to_user_full_pass() -> None:
