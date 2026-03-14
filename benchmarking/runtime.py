@@ -2389,6 +2389,7 @@ def run_single_model(
     ground_truth_column: str = GROUND_TRUTH_COLUMN,
     show_progress: bool = True,
     task_id: str = TASK_ID,
+    local_batch_size: int = 1,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
     對單一模型執行 benchmark。
@@ -2398,6 +2399,8 @@ def run_single_model(
     """
     global TASK_ID
     TASK_ID = task_id
+    if local_batch_size <= 0:
+        raise ValueError("local_batch_size 必須 > 0")
     runner = create_runner(spec)
     vram_torch_module = _resolve_vram_torch_module(runner)
     vram_samples_mb: list[float] = []
@@ -2499,7 +2502,7 @@ def run_single_model(
                 inference_results = [_build_empty_content_inference() for _ in prepared_rows]
                 row_latencies_ms: list[float] = [0.0 for _ in prepared_rows]
                 valid_slots: list[int] = []
-                batch_size = 8
+                batch_size = int(local_batch_size)
                 progress = tqdm(
                     total=len(prepared_rows),
                     desc=f"{spec.key} rows",
@@ -2703,6 +2706,7 @@ def run_single_model(
         "model_key": spec.key,
         "model_id": spec.model_id,
         "provider": spec.provider,
+        "local_batch_size": int(local_batch_size),
         "execution_time_sec": round(elapsed, 2),
         "model_params_b": spec.params_b,
         "prompt_tokens_total": prompt_tokens_total,

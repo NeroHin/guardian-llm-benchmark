@@ -211,8 +211,12 @@ def load_benchmark_spec(path: Path) -> BenchmarkSpec:
     runtime_raw = benchmark.get("runtime") or {}
     if runtime_raw and not isinstance(runtime_raw, dict):
         raise ValueError(f"benchmark 設定格式錯誤: {path} runtime 必須為 object")
+    batch_size = int(runtime_raw.get("batch_size", 1))
+    if batch_size <= 0:
+        raise ValueError(f"benchmark 設定格式錯誤: {path} runtime.batch_size 必須 > 0")
     runtime = BenchmarkRuntimeSpec(
         sample_limit=runtime_raw.get("sample_limit"),
+        batch_size=batch_size,
         shuffle=bool(runtime_raw.get("shuffle", True)),
         random_seed=int(runtime_raw.get("random_seed", 42)),
         fail_fast=bool(runtime_raw.get("fail_fast", False)),

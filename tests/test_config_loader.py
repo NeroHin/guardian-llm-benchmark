@@ -154,6 +154,30 @@ benchmark:
     assert benchmark.dataset.source == ()
 
 
+def test_load_benchmark_spec_reads_runtime_batch_size(tmp_path: Path) -> None:
+    benchmark = load_benchmark_spec(
+        _write_benchmark(
+            tmp_path,
+            """
+version: 1
+benchmark:
+  key: pii-baseline
+  task: pii_binary
+  dataset:
+    source: pii-source
+  models:
+    include_keys: [model-a]
+  runtime:
+    batch_size: 3
+  outputs:
+    dir: results/pii-baseline
+""",
+        )
+    )
+
+    assert benchmark.runtime.batch_size == 3
+
+
 def test_resolve_model_selection_uses_keys_then_all_models_fallback(tmp_path: Path) -> None:
     config = tmp_path / "models.yaml"
     config.write_text(

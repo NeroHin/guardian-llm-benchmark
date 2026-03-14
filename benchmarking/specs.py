@@ -63,6 +63,7 @@ class ModelSelectionSpec:
 @dataclass(frozen=True)
 class BenchmarkRuntimeSpec:
     sample_limit: int | None = None
+    batch_size: int = 1
     shuffle: bool = True
     random_seed: int = 42
     fail_fast: bool = False

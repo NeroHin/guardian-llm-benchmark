@@ -79,6 +79,7 @@ def run_benchmark(
                 ground_truth_column="ground_truth",
                 show_progress=show_progress,
                 task_id=task.task_id,
+                local_batch_size=benchmark.runtime.batch_size,
             )
             finished_at = datetime.now().isoformat(timespec="seconds")
             metrics_payload = {
@@ -87,6 +88,7 @@ def run_benchmark(
                 "task": task.task_id,
                 "benchmark_key": benchmark.key,
                 "benchmark_mode": _benchmark_mode(model_spec),
+                "batch_size": benchmark.runtime.batch_size,
                 "model_started_at": started_at,
                 "model_finished_at": finished_at,
             }
@@ -101,6 +103,7 @@ def run_benchmark(
                 "model_id": model_spec.model_id,
                 "provider": model_spec.provider,
                 "benchmark_mode": _benchmark_mode(model_spec),
+                "batch_size": benchmark.runtime.batch_size,
                 "status": "failed",
                 "error": str(exc),
             }

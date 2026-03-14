@@ -291,10 +291,16 @@ def test_run_single_model_uses_predict_batch_when_available(monkeypatch) -> None
     )
     spec = runtime.ModelSpec(key="fake-hf-batch", model_id="fake/batch-model", provider="huggingface")
 
-    result_df, _ = runtime.run_single_model(df, spec, content_column="content")
+    result_df, meta = runtime.run_single_model(
+        df,
+        spec,
+        content_column="content",
+        local_batch_size=4,
+    )
 
     assert runner.predict_called is False
-    assert runner.batch_call_sizes == [8, 1]
+    assert runner.batch_call_sizes == [4, 4, 1]
+    assert meta["local_batch_size"] == 4
     assert len(result_df) == 10
     assert result_df["parse_status"].tolist().count("parsed") == 9
 
@@ -308,7 +314,7 @@ def test_run_benchmark_writes_benchmark_mode_to_leaderboard_and_manifest(monkeyp
             negative=("negative",),
         ),
         models=ModelSelectionSpec(include_keys=("qwen3guard06b-stream",)),
-        runtime=BenchmarkRuntimeSpec(sample_limit=1, shuffle=False, random_seed=42),
+        runtime=BenchmarkRuntimeSpec(sample_limit=1, batch_size=1, shuffle=False, random_seed=42),
         outputs=BenchmarkOutputsSpec(dir=Path("results/pii-qwen-compare")),
         source_path=tmp_path / "benchmark.yaml",
     )
@@ -361,6 +367,7 @@ def test_run_benchmark_writes_benchmark_mode_to_leaderboard_and_manifest(monkeyp
             "vram_used_mb_min": 100.0,
             "vram_used_mb_max": 150.0,
             "vram_used_mb_avg": 120.0,
+            "local_batch_size": kwargs["local_batch_size"],
         }
         return result_df, meta
 
@@ -375,6 +382,7 @@ def test_run_benchmark_writes_benchmark_mode_to_leaderboard_and_manifest(monkeyp
     )
 
     assert leaderboard["benchmark_mode"].tolist() == ["full_pass", "early_stop"]
+    assert leaderboard["batch_size"].tolist() == [1, 1]
     assert leaderboard["vram_used_mb_avg"].tolist() == [120.0, 120.0]
     assert manifest["models"] == [
         "qwen3guard06b-stream-full-pass",
@@ -395,6 +403,7 @@ def test_run_benchmark_writes_benchmark_mode_to_leaderboard_and_manifest(monkeyp
         },
     ]
     assert full_pass_metrics["benchmark_mode"] == "full_pass"
+    assert full_pass_metrics["batch_size"] == 1
     assert full_pass_metrics["vram_used_mb_min"] == 100.0
     assert full_pass_metrics["vram_used_mb_max"] == 150.0
     assert full_pass_metrics["vram_used_mb_avg"] == 120.0
