@@ -66,6 +66,7 @@ models:
     model_id: Qwen/Qwen3Guard-Stream-0.6B
     provider: qwen_stream
     profile: qwen_stream
+    params_b: 0.6
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -80,6 +81,7 @@ models:
     model_id: Qwen/Qwen3Guard-Stream-0.6B
     provider: qwen_stream
     profile: qwen_stream
+    params_b: 0.6
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -94,6 +96,7 @@ models:
     model_id: Qwen/Qwen3Guard-Stream-0.6B
     provider: qwen_stream
     profile: qwen_stream
+    params_b: 0.6
     settings:
       trust_remote_code: true
       torch_dtype: auto
@@ -104,7 +107,7 @@ models:
         high_performance: true
         num_concurrent_range_gets: 32
 
-  - key: granite-micro-hf
+  - key: granite-micro
     model_id: ibm-granite/granite-4.0-h-micro
     provider: vllm_offline
     profile: granite_guard_json
@@ -118,7 +121,7 @@ models:
       top_p: 1.0
       seed: 42
 
-  - key: granite-tiny-hf-1b
+  - key: granite-tiny-1b
     model_id: ibm-granite/granite-4.0-h-1b
     provider: vllm_offline
     profile: granite_guard_json
@@ -132,10 +135,11 @@ models:
       top_p: 1.0
       seed: 42
 
-  - key: qwen25-05b-hf
+  - key: qwen25-05b
     model_id: Qwen/Qwen2.5-0.5B-Instruct
     provider: vllm_offline
     profile: qwen_instruct_json
+    params_b: 0.5
     settings:
       trust_remote_code: false
       torch_dtype: float16
@@ -145,10 +149,11 @@ models:
       top_p: 1.0
       seed: 42
 
-  - key: qwen25-3b-hf
+  - key: qwen25-3b
     model_id: Qwen/Qwen2.5-3B-Instruct
     provider: vllm_offline
     profile: qwen_instruct_json
+    params_b: 3.0
     settings:
       trust_remote_code: false
       torch_dtype: auto

@@ -7,14 +7,7 @@ benchmark:
     negative: multipriv_pii_negative
   models:
     include_keys:
-      - granite-openrouter
-      - gpt41nano-openrouter
-      - qwen3guard4b-userpass
-      - qwen3guard06b-userpass
-      - granite-micro-hf
-      - granite-tiny-hf-1b
-      - qwen25-05b-hf
-      - qwen25-3b-hf
+      - nemotron-h-4b-128k
   runtime:
     sample_limit: 50
     shuffle: true
