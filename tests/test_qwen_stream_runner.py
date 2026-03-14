@@ -163,8 +163,10 @@ def test_qwen_stream_predict_defaults_to_user_full_pass() -> None:
     inference = runner.predict("我的身分證字號是A123456789")
 
     assert inference.stream_mode == "user_full_pass_stream_api"
+    assert inference.stream_mode != "assistant_token_stream_api"
     assert inference.early_stopped is False
     assert inference.contains_pii is False
+    assert inference.detection_latency_ms is None
     assert inference.fallback_used is False
     assert inference.processed_tokens == 4
     assert inference.total_tokens == 4

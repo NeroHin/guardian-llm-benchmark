@@ -9,16 +9,22 @@ import benchmarking.runtime as runtime
 
 def test_create_runner_dispatches_by_provider(monkeypatch) -> None:
     monkeypatch.setitem(runtime.RUNNER_FACTORIES, "openrouter", lambda spec: f"or:{spec.key}")
+    monkeypatch.setitem(runtime.RUNNER_FACTORIES, "openai_compatible", lambda spec: f"oc:{spec.key}")
+    monkeypatch.setitem(runtime.RUNNER_FACTORIES, "vllm_offline", lambda spec: f"vo:{spec.key}")
     monkeypatch.setitem(runtime.RUNNER_FACTORIES, "huggingface", lambda spec: f"hf:{spec.key}")
     monkeypatch.setitem(runtime.RUNNER_FACTORIES, "qwen_stream", lambda spec: f"qs:{spec.key}")
 
     s1 = runtime.ModelSpec(key="k1", model_id="m1", provider="openrouter")
-    s2 = runtime.ModelSpec(key="k2", model_id="m2", provider="huggingface")
-    s3 = runtime.ModelSpec(key="k3", model_id="m3", provider="qwen_stream")
+    s2 = runtime.ModelSpec(key="k2", model_id="m2", provider="openai_compatible")
+    s3 = runtime.ModelSpec(key="k3", model_id="m3", provider="vllm_offline")
+    s4 = runtime.ModelSpec(key="k4", model_id="m4", provider="huggingface")
+    s5 = runtime.ModelSpec(key="k5", model_id="m5", provider="qwen_stream")
 
     assert runtime.create_runner(s1) == "or:k1"
-    assert runtime.create_runner(s2) == "hf:k2"
-    assert runtime.create_runner(s3) == "qs:k3"
+    assert runtime.create_runner(s2) == "oc:k2"
+    assert runtime.create_runner(s3) == "vo:k3"
+    assert runtime.create_runner(s4) == "hf:k4"
+    assert runtime.create_runner(s5) == "qs:k5"
 
 
 def test_create_runner_unknown_provider_raises() -> None:

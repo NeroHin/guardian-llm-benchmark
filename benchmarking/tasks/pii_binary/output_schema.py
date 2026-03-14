@@ -9,6 +9,6 @@ PII_BINARY_OUTPUT_SCHEMA: dict[str, object] = {
         "reason": {"type": "string"},
         "raw_text": {"type": "string"},
     },
-    "required": ["contains_pii", "label", "confidence", "reason"],
+    "required": ["contains_pii"],
     "additionalProperties": False,
 }

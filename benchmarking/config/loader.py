@@ -249,6 +249,10 @@ def resolve_model_selection(
             return [spec]
 
         base_settings = dict(spec.settings)
+        use_assistant_stream = bool(base_settings.get("assistant_stream_simulation", True))
+        if not use_assistant_stream:
+            return [spec]
+
         return [
             ModelSpec(
                 key=f"{spec.key}-full-pass",
