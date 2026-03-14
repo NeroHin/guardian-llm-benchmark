@@ -163,6 +163,36 @@ models:
       top_p: 1.0
       seed: 42
 
+  - key: nemotron-h-4b-16k
+    model_id: nvidia/Nemotron-H-4B-Instruct-128K
+    provider: vllm_offline
+    profile: qwen_instruct_json
+    params_b: 4.0
+    settings:
+      trust_remote_code: true
+      torch_dtype: float16
+      gpu_memory_utilization: 0.75
+      max_model_len: 16384
+      max_tokens: 48
+      temperature: 0
+      top_p: 1.0
+      seed: 42
+
+  - key: nemotron-h-4b-32k
+    model_id: nvidia/Nemotron-H-4B-Instruct-128K
+    provider: vllm_offline
+    profile: qwen_instruct_json
+    params_b: 4.0
+    settings:
+      trust_remote_code: true
+      torch_dtype: float16
+      gpu_memory_utilization: 0.8
+      max_model_len: 32768
+      max_tokens: 48
+      temperature: 0
+      top_p: 1.0
+      seed: 42
+
   - key: nemotron-h-4b-128k
     model_id: nvidia/Nemotron-H-4B-Instruct-128K
     provider: vllm_offline
