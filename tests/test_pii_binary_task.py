@@ -13,6 +13,21 @@ def test_pii_binary_prompt_builder_requires_single_json_object() -> None:
     assert '"label"' not in prompts["user"]
 
 
+def test_pii_binary_prompt_builder_uses_nemotron_specific_non_tool_prompt() -> None:
+    task = get_task_definition("pii_binary")
+
+    prompts = task.prompt_builder.build(
+        "nvidia/Nemotron-H-4B-Instruct-128K",
+        "測試內容：王小明的手機是0912345678",
+    )
+
+    assert "No tools are available." in prompts["system"]
+    assert "Never emit <TOOLCALL>" in prompts["user"]
+    assert '{"contains_pii": true}' in prompts["user"]
+    assert '{"contains_pii": false}' in prompts["user"]
+    assert "只輸出一個可解析的 JSON 物件" not in prompts["user"]
+
+
 def test_pii_binary_strict_parser_accepts_minimal_json() -> None:
     task = get_task_definition("pii_binary")
 
