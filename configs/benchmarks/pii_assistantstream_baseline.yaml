@@ -1,16 +1,16 @@
 version: 1
 benchmark:
-  key: pii-needle-16k-start-pair
+  key: pii-assistantstream-baseline
   task: pii_binary
   dataset:
-    positive: harmless_long_context_16k_needle_start_positive
-    negative: harmless_long_context_16k_negative
+    positive: multipriv_pii_positive
+    negative: multipriv_pii_negative
   models:
     include_keys:
       - granite-openrouter
       - gpt41nano-openrouter
-      - qwen3guard4b-userpass
-      - qwen3guard06b-userpass
+      - qwen3guard4b-assistantstream
+      - qwen3guard06b-assistantstream
       - granite-micro-hf
       - granite-tiny-hf-1b
       - qwen25-05b-hf
@@ -21,6 +21,6 @@ benchmark:
     random_seed: 42
     fail_fast: false
   outputs:
-    dir: results/pii-needle-16k-start-pair
+    dir: results/pii-assistantstream-baseline
     save_rows: true
     save_metrics_json: true

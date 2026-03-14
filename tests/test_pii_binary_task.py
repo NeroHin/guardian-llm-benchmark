@@ -10,9 +10,22 @@ def test_pii_binary_prompt_builder_requires_single_json_object() -> None:
 
     assert "只輸出一個可解析的 JSON 物件" in prompts["user"]
     assert '"contains_pii"' in prompts["user"]
+    assert '"label"' not in prompts["user"]
 
 
-def test_pii_binary_strict_parser_accepts_valid_json() -> None:
+def test_pii_binary_strict_parser_accepts_minimal_json() -> None:
+    task = get_task_definition("pii_binary")
+
+    parsed = task.output_parser.parse('{"contains_pii": true}')
+
+    assert parsed["parse_status"] == "parsed"
+    assert parsed["contains_pii"] is True
+    assert parsed["label"] == "是"
+    assert parsed["confidence"] is None
+    assert parsed["reason"] == ""
+
+
+def test_pii_binary_strict_parser_accepts_full_json_backward_compatible() -> None:
     task = get_task_definition("pii_binary")
 
     parsed = task.output_parser.parse(
@@ -21,17 +34,21 @@ def test_pii_binary_strict_parser_accepts_valid_json() -> None:
 
     assert parsed["parse_status"] == "parsed"
     assert parsed["contains_pii"] is True
+    assert parsed["label"] == "是"
+    assert parsed["confidence"] == 0.91
+    assert parsed["reason"] == "包含身分證資訊"
 
 
-def test_pii_binary_strict_parser_rejects_non_json_and_mismatched_label() -> None:
+def test_pii_binary_strict_parser_rejects_non_json_missing_required_and_invalid_optional_types() -> None:
     task = get_task_definition("pii_binary")
 
     invalid_text = task.output_parser.parse("這不是 JSON")
-    invalid_label = task.output_parser.parse(
-        '{"contains_pii": true, "label": "否", "confidence": 0.91, "reason": "錯誤"}'
-    )
+    missing_required = task.output_parser.parse('{"label": "是"}')
+    invalid_optional = task.output_parser.parse('{"contains_pii": true, "confidence": "high"}')
 
     assert invalid_text["parse_status"] == "unparseable"
     assert "invalid_json" in invalid_text["error"]
-    assert invalid_label["parse_status"] == "unparseable"
-    assert "label does not match" in invalid_label["error"]
+    assert missing_required["parse_status"] == "unparseable"
+    assert "missing fields" in missing_required["error"]
+    assert invalid_optional["parse_status"] == "unparseable"
+    assert "confidence must be number" in invalid_optional["error"]

@@ -23,12 +23,12 @@ class PIIBinaryStrictJSONParser:
         if not isinstance(payload, dict):
             return {**base, "error": "schema_error: output must be an object"}
 
-        required = ("contains_pii", "label", "confidence", "reason")
+        required = ("contains_pii",)
         missing = [key for key in required if key not in payload]
         if missing:
             return {**base, "error": f"schema_error: missing fields {missing}"}
 
-        allowed_keys = set(required) | {"raw_text"}
+        allowed_keys = {"contains_pii", "label", "confidence", "reason", "raw_text"}
         unknown = sorted(set(payload.keys()) - allowed_keys)
         if unknown:
             return {**base, "error": f"schema_error: unknown fields {unknown}"}
@@ -40,23 +40,35 @@ class PIIBinaryStrictJSONParser:
 
         if not isinstance(contains_pii, bool):
             return {**base, "error": "schema_error: contains_pii must be boolean"}
-        if label not in {"是", "否"}:
-            return {**base, "error": "schema_error: label must be '是' or '否'"}
-        if (contains_pii and label != "是") or ((not contains_pii) and label != "否"):
-            return {**base, "error": "schema_error: label does not match contains_pii"}
-        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-            return {**base, "error": "schema_error: confidence must be number"}
-        if not 0 <= float(confidence) <= 1:
-            return {**base, "error": "schema_error: confidence out of range"}
-        if not isinstance(reason, str):
-            return {**base, "error": "schema_error: reason must be string"}
+
+        normalized_label = "是" if contains_pii else "否"
+        if label is not None:
+            if label not in {"是", "否"}:
+                return {**base, "error": "schema_error: label must be '是' or '否'"}
+            if (contains_pii and label != "是") or ((not contains_pii) and label != "否"):
+                return {**base, "error": "schema_error: label does not match contains_pii"}
+            normalized_label = label
+
+        normalized_confidence = None
+        if confidence is not None:
+            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+                return {**base, "error": "schema_error: confidence must be number"}
+            if not 0 <= float(confidence) <= 1:
+                return {**base, "error": "schema_error: confidence out of range"}
+            normalized_confidence = float(confidence)
+
+        normalized_reason = ""
+        if reason is not None:
+            if not isinstance(reason, str):
+                return {**base, "error": "schema_error: reason must be string"}
+            normalized_reason = reason.strip()
 
         return {
             "raw_output": raw_text,
             "parse_status": "parsed",
             "contains_pii": contains_pii,
-            "label": label,
-            "confidence": float(confidence),
-            "reason": reason.strip(),
+            "label": normalized_label,
+            "confidence": normalized_confidence,
+            "reason": normalized_reason,
             "error": "",
         }

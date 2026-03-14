@@ -23,6 +23,14 @@ uv sync --all-groups
 uv pip install -r requirements.txt
 ```
 
+如果你要在 Linux GPU server 上跑 `vllm_offline`：
+
+```bash
+uv pip install -r requirements.txt --torch-backend=auto
+```
+
+目前 `requirements.txt` 與 `pyproject.toml` 都已加入 Linux-only 的 `vllm` 依賴。
+
 OpenRouter 模型需要 API key，根目錄 `.env` 內至少放：
 
 ```bash
@@ -52,6 +60,7 @@ configs/
 - `configs/models/default.yaml`
 - `configs/datasets/pii_datasets.yaml`
 - `configs/benchmarks/pii_baseline.yaml`
+- `configs/benchmarks/pii_assistantstream_baseline.yaml`
 
 ## 3. 核心概念
 
@@ -78,15 +87,17 @@ version: 1
 models:
   - key: granite-micro-hf
     model_id: ibm-granite/granite-4.0-h-micro
-    provider: huggingface
+    provider: vllm_offline
     profile: granite_guard_json
     params_b: 3.0
     settings:
       trust_remote_code: true
       torch_dtype: auto
-      device_map: auto
-      max_new_tokens: 256
-      do_sample: false
+      gpu_memory_utilization: 0.9
+      max_tokens: 48
+      temperature: 0
+      top_p: 1.0
+      seed: 42
 ```
 
 ### Datasets
@@ -169,7 +180,7 @@ benchmark:
     negative: multipriv_pii_negative
   models:
     include_keys:
-      - qwen3guard06b-stream
+      - qwen3guard06b-userpass
       - granite-micro-hf
   runtime:
     sample_limit: 50
@@ -181,6 +192,26 @@ benchmark:
     save_rows: true
     save_metrics_json: true
 ```
+
+assistant-stream 專用 benchmark 則使用：
+
+```yaml
+version: 1
+benchmark:
+  key: pii-assistantstream-baseline
+  task: pii_binary
+  dataset:
+    positive: multipriv_pii_positive
+    negative: multipriv_pii_negative
+  models:
+    include_keys:
+      - qwen3guard06b-assistantstream
+      - granite-micro-hf
+  outputs:
+    dir: results/pii-assistantstream-baseline
+```
+
+兩者會輸出到不同 run 目錄，因此 leaderboard 不會混在一起。
 
 ## 4. CLI 使用方式
 
@@ -257,6 +288,11 @@ results/<benchmark-key>/<run-id>/
 - `overhead_latency_ms_p95`
 - `cost_usd_total`
 - `cost_usd_avg`
+- `vram_used_mb_min`
+- `vram_used_mb_max`
+- `vram_used_mb_avg`
+- `vram_sample_count`
+- `vram_device_count`
 
 ## 6. 新增 benchmark 的流程
 
@@ -288,6 +324,17 @@ results/<benchmark-key>/<run-id>/
 
 ```json
 {
+  "contains_pii": true
+}
+```
+
+正式 parser 仍要求 strict JSON。  
+非 JSON、schema 不符、欄位不一致，都會被記成 `unparseable`。
+
+為了 backward compatibility，parser 仍接受完整格式：
+
+```json
+{
   "contains_pii": true,
   "label": "是",
   "confidence": 0.93,
@@ -295,8 +342,7 @@ results/<benchmark-key>/<run-id>/
 }
 ```
 
-正式 parser 只接受 strict JSON。  
-非 JSON、schema 不符、欄位不一致，都會被記成 `unparseable`。
+但 benchmark prompt 已不再要求模型必須生成 `label / confidence / reason`。
 
 ## 8. 效能與 GPU 成本建議
 
@@ -308,6 +354,8 @@ results/<benchmark-key>/<run-id>/
 - benchmark core 不再透過舊版 `execution.py` 動態載入
 - row-level 結果不再做重複 parsing
 - Qwen stream debug log 預設關閉，避免大量 token 級寫檔
+- 本地 non-stream 模型預設走 `vllm_offline`
+- benchmark 會記錄每個 model run 的 VRAM min / max / avg
 
 如果要開 Qwen debug：
 
@@ -317,10 +365,17 @@ GUARDIAN_BENCHMARK_QWEN_DEBUG=1 uv run guardian-benchmark run --benchmark config
 
 
 - OpenRouter 模型：調高 concurrency，但先看 provider rate limit
-- HF 本地模型：優先選單模型單卡跑滿，不要同機混跑多模型
+- `vllm_offline` 本地模型：優先選單模型單卡跑滿，不要同機混跑多模型
 - 若你要追求吞吐量，Granite/Qwen instruct 類分類模型會比 stream moderation 更省 GPU hours
 - 大量跑 benchmark 時預設加上 `--no-progress`
 - 對本地模型先用小樣本 smoke test，確認 tokenizer / remote code / 顯存配置正確再放大
+
+Nemotron-H-4B-Instruct-128K 已加入預設 model registry，可先用最小 smoke script 檢查 `vllm_offline` 是否能正常載入：
+
+```bash
+uv run python scripts/smoke_vllm_offline_model.py --skip-generate
+uv run python scripts/smoke_vllm_offline_model.py
+```
 
 ## 9. 測試
 
