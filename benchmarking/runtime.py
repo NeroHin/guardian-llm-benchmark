@@ -1038,6 +1038,7 @@ class VLLMOfflineRunner:
             raise RuntimeError("缺少 transformers 套件，請先安裝 requirements.txt") from e
 
         try:
+            import vllm
             from vllm import LLM, SamplingParams
         except ImportError as e:  # pragma: no cover - runtime dependency
             raise RuntimeError("缺少 vllm 套件，請先安裝對應版本") from e
@@ -1047,6 +1048,28 @@ class VLLMOfflineRunner:
         self.profile = spec.profile
         self._settings = dict(spec.settings)
         self._SamplingParams = SamplingParams
+        self._structured_outputs_arg_name: str | None = None
+        self._structured_outputs_factory: Callable[..., Any] | None = None
+
+        sampling_module = getattr(vllm, "sampling_params", None)
+        structured_outputs_cls = getattr(sampling_module, "StructuredOutputsParams", None)
+        guided_decoding_cls = getattr(sampling_module, "GuidedDecodingParams", None)
+        if structured_outputs_cls is None and guided_decoding_cls is None:
+            try:
+                from vllm.sampling_params import StructuredOutputsParams as structured_outputs_cls  # type: ignore
+            except Exception:
+                structured_outputs_cls = None
+            try:
+                from vllm.sampling_params import GuidedDecodingParams as guided_decoding_cls  # type: ignore
+            except Exception:
+                guided_decoding_cls = None
+
+        if structured_outputs_cls is not None:
+            self._structured_outputs_arg_name = "structured_outputs"
+            self._structured_outputs_factory = structured_outputs_cls
+        elif guided_decoding_cls is not None:
+            self._structured_outputs_arg_name = "guided_decoding"
+            self._structured_outputs_factory = guided_decoding_cls
 
         trust_remote_code = bool(self._settings.get("trust_remote_code", True))
         self._tokenizer = AutoTokenizer.from_pretrained(
@@ -1118,6 +1141,18 @@ class VLLMOfflineRunner:
             normalized_stop = [str(item) for item in stop if str(item).strip()]
             if normalized_stop:
                 kwargs["stop"] = normalized_stop
+
+        if bool(self._settings.get("use_structured_outputs", True)):
+            task = get_task_definition(TASK_ID)
+            output_schema = getattr(task, "output_schema", None)
+            if (
+                isinstance(output_schema, dict)
+                and self._structured_outputs_arg_name is not None
+                and self._structured_outputs_factory is not None
+            ):
+                kwargs[self._structured_outputs_arg_name] = self._structured_outputs_factory(
+                    json=output_schema
+                )
 
         return self._SamplingParams(**kwargs)
 

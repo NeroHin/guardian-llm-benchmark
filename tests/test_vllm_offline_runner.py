@@ -40,6 +40,11 @@ class _FakeSamplingParams:
         self.kwargs = kwargs
 
 
+class _FakeStructuredOutputsParams:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+
+
 class _FakeLLM:
     init_calls: list[dict[str, object]] = []
     generate_calls: list[tuple[list[str], dict[str, object]]] = []
@@ -83,7 +88,13 @@ def test_vllm_offline_runner_predict_batch(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
         "vllm",
-        types.SimpleNamespace(LLM=_FakeLLM, SamplingParams=_FakeSamplingParams),
+        types.SimpleNamespace(
+            LLM=_FakeLLM,
+            SamplingParams=_FakeSamplingParams,
+            sampling_params=types.SimpleNamespace(
+                StructuredOutputsParams=_FakeStructuredOutputsParams,
+            ),
+        ),
     )
 
     spec = runtime.ModelSpec(
@@ -130,6 +141,8 @@ def test_vllm_offline_runner_predict_batch(monkeypatch) -> None:
     assert sampling_kwargs["temperature"] == 0.0
     assert sampling_kwargs["max_tokens"] == 64
     assert sampling_kwargs["top_p"] == 0.95
+    assert isinstance(sampling_kwargs["structured_outputs"], _FakeStructuredOutputsParams)
+    assert sampling_kwargs["structured_outputs"].kwargs["json"]["required"] == ["contains_pii"]
 
 
 def test_vllm_offline_runner_predict_wraps_single_item(monkeypatch) -> None:
@@ -143,7 +156,13 @@ def test_vllm_offline_runner_predict_wraps_single_item(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
         "vllm",
-        types.SimpleNamespace(LLM=_FakeLLM, SamplingParams=_FakeSamplingParams),
+        types.SimpleNamespace(
+            LLM=_FakeLLM,
+            SamplingParams=_FakeSamplingParams,
+            sampling_params=types.SimpleNamespace(
+                StructuredOutputsParams=_FakeStructuredOutputsParams,
+            ),
+        ),
     )
 
     spec = runtime.ModelSpec(
@@ -160,3 +179,4 @@ def test_vllm_offline_runner_predict_wraps_single_item(monkeypatch) -> None:
     assert result.prompt_tokens == 4
     assert result.completion_tokens == 2
     assert _FakeLLM.generate_calls[0][1]["max_tokens"] == 32
+    assert isinstance(_FakeLLM.generate_calls[0][1]["structured_outputs"], _FakeStructuredOutputsParams)
