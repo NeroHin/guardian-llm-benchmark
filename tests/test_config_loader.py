@@ -13,6 +13,9 @@ from benchmarking.config.loader import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_load_model_registry_reads_params(tmp_path: Path) -> None:
     config = tmp_path / "models.yaml"
     config.write_text(
@@ -277,6 +280,86 @@ benchmark:
     assert explicit[0].settings["assistant_stream_simulation"] is True
     assert explicit[1].settings["assistant_stream_simulation"] is True
     assert [item.key for item in fallback] == ["qwen-a-full-pass", "qwen-a-early-stop", "model-b"]
+
+
+def test_resolve_model_selection_keeps_qwen_userpass_as_single_run(tmp_path: Path) -> None:
+    config = tmp_path / "models.yaml"
+    config.write_text(
+        """
+version: 1
+models:
+  - key: qwen-userpass
+    model_id: vendor/qwen-userpass
+    provider: qwen_stream
+    settings:
+      assistant_stream_simulation: false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    registry = load_model_registry(config)
+    selected = resolve_model_selection(
+        registry,
+        load_benchmark_spec(
+            _write_benchmark(
+                tmp_path,
+                """
+version: 1
+benchmark:
+  key: pii-baseline
+  task: pii_binary
+  dataset:
+    source: pii-source
+  models:
+    include_keys: [qwen-userpass]
+  outputs:
+    dir: results/pii-baseline
+""",
+            )
+        ).models,
+    )
+
+    assert [item.key for item in selected] == ["qwen-userpass"]
+    assert selected[0].settings["assistant_stream_simulation"] is False
+
+
+def test_qwen_assistantstream_alias_resolves_like_legacy_stream_key(tmp_path: Path) -> None:
+    registry = load_model_registry(ROOT / "configs/models/default.yaml")
+    selection = load_benchmark_spec(
+        _write_benchmark(
+            tmp_path,
+            """
+version: 1
+benchmark:
+  key: pii-assistantstream-baseline
+  task: pii_binary
+  dataset:
+    source: pii-source
+  models:
+    include_keys: [qwen3guard06b-stream, qwen3guard06b-assistantstream]
+  outputs:
+    dir: results/pii-assistantstream-baseline
+""",
+        )
+    ).models
+
+    selected = resolve_model_selection(registry, selection)
+    legacy = selected[:2]
+    alias = selected[2:]
+
+    assert [item.key for item in legacy] == [
+        "qwen3guard06b-stream-full-pass",
+        "qwen3guard06b-stream-early-stop",
+    ]
+    assert [item.key for item in alias] == [
+        "qwen3guard06b-assistantstream-full-pass",
+        "qwen3guard06b-assistantstream-early-stop",
+    ]
+    assert [item.provider for item in legacy] == [item.provider for item in alias]
+    assert [item.profile for item in legacy] == [item.profile for item in alias]
+    assert [item.settings["benchmark_mode"] for item in legacy] == [
+        item.settings["benchmark_mode"] for item in alias
+    ]
 
 
 def _write_benchmark(tmp_path: Path, content: str) -> Path:

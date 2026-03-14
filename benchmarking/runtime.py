@@ -59,6 +59,7 @@ GROUND_TRUTH_COLUMN = "ground_truth"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
+OPENAI_COMPAT_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 QWEN_DEBUG_LOG_PATH = ROOT / "results" / "qwen_stream_debug.log"
 QWEN_SAFETY_PATTERN = r"Safety:\s*(Safe|Unsafe|Controversial)"
 QWEN_CATEGORY_PATTERN = (
@@ -114,6 +115,88 @@ def _release_cuda_memory(torch_module: Any | None = None) -> None:
     except Exception:
         # 記憶體回收失敗不應中斷主流程
         return
+
+
+def _resolve_vram_torch_module(runner: Any) -> Any | None:
+    tm = getattr(runner, "_torch", None)
+    if tm is not None:
+        return tm
+    try:
+        import torch as tm  # type: ignore
+
+        return tm
+    except Exception:
+        return None
+
+
+def _sample_total_vram_usage_mb(torch_module: Any | None = None) -> tuple[float | None, int]:
+    try:
+        tm = torch_module
+        if tm is None:
+            import torch as tm  # type: ignore
+
+        if not tm.cuda.is_available():
+            return None, 0
+
+        device_count = max(int(tm.cuda.device_count()), 1)
+        used_samples_mb: list[float] = []
+        for device_idx in range(device_count):
+            try:
+                free_bytes, total_bytes = tm.cuda.mem_get_info(device_idx)
+                used_samples_mb.append(float(total_bytes - free_bytes) / (1024 * 1024))
+                continue
+            except Exception:
+                pass
+
+            try:
+                used_samples_mb.append(float(tm.cuda.memory_reserved(device_idx)) / (1024 * 1024))
+            except Exception:
+                continue
+
+        if not used_samples_mb:
+            return None, device_count
+        return float(sum(used_samples_mb)), device_count
+    except Exception:
+        return None, 0
+
+
+def _summarize_vram_usage_mb(samples_mb: list[float], *, device_count: int) -> dict[str, Any]:
+    if not samples_mb:
+        return {
+            "vram_used_mb_min": None,
+            "vram_used_mb_max": None,
+            "vram_used_mb_avg": None,
+            "vram_sample_count": 0,
+            "vram_device_count": device_count,
+        }
+
+    return {
+        "vram_used_mb_min": round(min(samples_mb), 2),
+        "vram_used_mb_max": round(max(samples_mb), 2),
+        "vram_used_mb_avg": round(sum(samples_mb) / len(samples_mb), 2),
+        "vram_sample_count": len(samples_mb),
+        "vram_device_count": device_count,
+    }
+
+
+def _build_chat_prompt_text(tokenizer: Any, messages: list[dict[str, str]]) -> str:
+    apply_template = getattr(tokenizer, "apply_chat_template", None)
+    if callable(apply_template):
+        try:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+    return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
 
 
 # =============================================================================
@@ -809,6 +892,333 @@ class OpenRouterRunner:
         return None
 
 
+class OpenAICompatibleRunner:
+    def __init__(self, spec: ModelSpec) -> None:
+        try:
+            from openai import OpenAI, AsyncOpenAI
+        except ImportError as e:  # pragma: no cover - runtime dependency
+            raise RuntimeError("缺少 openai 套件，請先安裝 requirements.txt") from e
+
+        self.model_id = spec.model_id
+        self.provider = "openai_compatible"
+        self._settings = dict(spec.settings)
+
+        base_url = str(
+            self._settings.get("base_url")
+            or get_env("OPENAI_COMPAT_BASE_URL")
+            or OPENAI_COMPAT_DEFAULT_BASE_URL
+        ).strip()
+        if not base_url:
+            base_url = OPENAI_COMPAT_DEFAULT_BASE_URL
+
+        api_key = self._resolve_api_key(self._settings)
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._async_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._concurrency = max(1, int(self._settings.get("concurrency") or 8))
+
+    @staticmethod
+    def _resolve_api_key(settings: dict[str, Any]) -> str:
+        direct_key = settings.get("api_key")
+        if direct_key is not None and str(direct_key).strip():
+            return str(direct_key).strip()
+
+        env_name = str(settings.get("api_key_env") or "OPENAI_COMPAT_API_KEY").strip()
+        if env_name:
+            env_key = get_env(env_name, "")
+            if env_key.strip():
+                return env_key.strip()
+
+        fallback = get_env("OPENAI_COMPAT_API_KEY", "")
+        if fallback.strip():
+            return fallback.strip()
+        return "EMPTY"
+
+    @staticmethod
+    def _extract_usage(completion: Any) -> tuple[int, int]:
+        usage = getattr(completion, "usage", None)
+        if usage is None:
+            return 0, 0
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        return prompt_tokens, completion_tokens
+
+    def _build_completion_kwargs(self, content: str) -> dict[str, Any]:
+        prompts = get_task_definition(TASK_ID).prompt_builder.build(
+            model_id=self.model_id,
+            content=content,
+        )
+
+        messages = [
+            {"role": "system", "content": prompts["system"]},
+            {"role": "user", "content": prompts["user"]},
+        ]
+
+        temperature = self._settings.get("temperature", 0)
+        max_tokens = self._settings.get("max_tokens", 128)
+        response_format = self._settings.get("response_format", "json_object")
+
+        kwargs: dict[str, Any] = {
+            "model": self.model_id,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format:
+            kwargs["extra_body"] = {"response_format": {"type": str(response_format)}}
+        return kwargs
+
+    def _completion_to_result(self, completion: Any) -> InferenceResult:
+        raw_text = ""
+        if getattr(completion, "choices", None):
+            message = completion.choices[0].message
+            raw_text = message.content if message and message.content else ""
+
+        normalized = normalize_pii_binary_json(raw_text)
+        prompt_tokens, completion_tokens = self._extract_usage(completion)
+        return InferenceResult(
+            output_json=json.dumps(normalized, ensure_ascii=False),
+            contains_pii=normalized.get("contains_pii"),
+            cost_usd=0.0,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    @property
+    def concurrency(self) -> int:
+        return self._concurrency
+
+    async def aclose_async_client(self) -> None:
+        client = getattr(self, "_async_client", None)
+        if client is None:
+            return
+
+        try:
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                maybe_awaitable = close_fn()
+                if hasattr(maybe_awaitable, "__await__"):
+                    await maybe_awaitable
+                return
+
+            aclose_fn = getattr(client, "aclose", None)
+            if callable(aclose_fn):
+                maybe_awaitable = aclose_fn()
+                if hasattr(maybe_awaitable, "__await__"):
+                    await maybe_awaitable
+        except Exception:
+            return
+
+    def predict(self, content: str) -> InferenceResult:
+        kwargs = self._build_completion_kwargs(content)
+        completion = self._client.chat.completions.create(**kwargs)
+        return self._completion_to_result(completion)
+
+    async def predict_async(self, content: str) -> InferenceResult:
+        kwargs = self._build_completion_kwargs(content)
+        completion = await self._async_client.chat.completions.create(**kwargs)
+        return self._completion_to_result(completion)
+
+    def close(self) -> None:
+        client = getattr(self, "_client", None)
+        if client is not None:
+            try:
+                close_fn = getattr(client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+            except Exception:
+                pass
+        return None
+
+
+class VLLMOfflineRunner:
+    def __init__(self, spec: ModelSpec) -> None:
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as e:  # pragma: no cover - runtime dependency
+            raise RuntimeError("缺少 transformers 套件，請先安裝 requirements.txt") from e
+
+        try:
+            from vllm import LLM, SamplingParams
+        except ImportError as e:  # pragma: no cover - runtime dependency
+            raise RuntimeError("缺少 vllm 套件，請先安裝對應版本") from e
+
+        self.model_id = spec.model_id
+        self.provider = "vllm_offline"
+        self.profile = spec.profile
+        self._settings = dict(spec.settings)
+        self._SamplingParams = SamplingParams
+
+        trust_remote_code = bool(self._settings.get("trust_remote_code", True))
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            self.model_id,
+            trust_remote_code=trust_remote_code,
+        )
+        if getattr(self._tokenizer, "pad_token", None) is None:
+            eos_token = getattr(self._tokenizer, "eos_token", None)
+            if eos_token is not None:
+                self._tokenizer.pad_token = eos_token
+
+        llm_kwargs: dict[str, Any] = {
+            "model": self.model_id,
+            "trust_remote_code": trust_remote_code,
+        }
+        dtype = self._settings.get("dtype", self._settings.get("torch_dtype"))
+        if dtype is not None:
+            dtype_str = str(dtype).strip()
+            if dtype_str and dtype_str.lower() != "auto":
+                llm_kwargs["dtype"] = dtype_str
+
+        for key in (
+            "tensor_parallel_size",
+            "gpu_memory_utilization",
+            "max_model_len",
+            "enforce_eager",
+            "download_dir",
+            "quantization",
+            "swap_space",
+            "seed",
+            "max_num_batched_tokens",
+        ):
+            value = self._settings.get(key)
+            if value is not None:
+                llm_kwargs[key] = value
+
+        self._llm = LLM(**llm_kwargs)
+
+    def _build_prompt_text(self, messages: list[dict[str, str]]) -> str:
+        return _build_chat_prompt_text(self._tokenizer, messages)
+
+    def _build_sampling_params(self) -> Any:
+        kwargs: dict[str, Any] = {
+            "temperature": float(self._settings.get("temperature", 0)),
+            "max_tokens": int(
+                self._settings.get("max_tokens", self._settings.get("max_new_tokens", 128))
+            ),
+        }
+        for key in (
+            "top_p",
+            "top_k",
+            "min_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "repetition_penalty",
+        ):
+            value = self._settings.get(key)
+            if value is not None:
+                kwargs[key] = float(value)
+
+        seed = self._settings.get("seed")
+        if seed is not None:
+            kwargs["seed"] = int(seed)
+
+        stop = self._settings.get("stop")
+        if isinstance(stop, str) and stop.strip():
+            kwargs["stop"] = [stop]
+        elif isinstance(stop, list):
+            normalized_stop = [str(item) for item in stop if str(item).strip()]
+            if normalized_stop:
+                kwargs["stop"] = normalized_stop
+
+        return self._SamplingParams(**kwargs)
+
+    @staticmethod
+    def _input_id_length(tokenized: Any) -> int:
+        input_ids = tokenized.get("input_ids") if isinstance(tokenized, dict) else getattr(tokenized, "input_ids", None)
+        if input_ids is None:
+            return 0
+        if hasattr(input_ids, "shape"):
+            shape = input_ids.shape
+            if len(shape) == 2:
+                return int(shape[-1])
+            if len(shape) == 1:
+                return int(shape[0])
+        if isinstance(input_ids, list):
+            if input_ids and isinstance(input_ids[0], list):
+                return len(input_ids[0])
+            return len(input_ids)
+        try:
+            return len(input_ids)
+        except TypeError:
+            return 0
+
+    @staticmethod
+    def _completion_token_length(output_item: Any) -> int:
+        token_ids = getattr(output_item, "token_ids", None)
+        if token_ids is None:
+            return 0
+        try:
+            return int(len(token_ids))
+        except TypeError:
+            return 0
+
+    def predict(self, content: str) -> InferenceResult:
+        return self.predict_batch([content])[0]
+
+    def predict_batch(self, contents: list[str]) -> list[InferenceResult]:
+        if not contents:
+            return []
+
+        prompts: list[str] = []
+        prompt_token_lengths: list[int] = []
+        for content in contents:
+            task_prompts = get_task_definition(TASK_ID).prompt_builder.build(
+                model_id=self.model_id,
+                content=content,
+            )
+            messages = [
+                {"role": "system", "content": task_prompts["system"]},
+                {"role": "user", "content": task_prompts["user"]},
+            ]
+            prompt_text = self._build_prompt_text(messages)
+            prompts.append(prompt_text)
+            prompt_token_lengths.append(self._input_id_length(self._tokenizer(prompt_text)))
+
+        outputs = self._llm.generate(prompts, self._build_sampling_params())
+        if len(outputs) != len(contents):
+            raise RuntimeError(
+                "vllm generate 回傳筆數與輸入不一致: "
+                f"{len(outputs)} != {len(contents)}"
+            )
+        results: list[InferenceResult] = []
+        for idx, output in enumerate(outputs):
+            output_items = getattr(output, "outputs", None) or []
+            output_item = output_items[0] if output_items else None
+            raw_text = str(getattr(output_item, "text", "") or "")
+            normalized = normalize_pii_binary_json(raw_text)
+
+            prompt_tokens = prompt_token_lengths[idx]
+            prompt_token_ids = getattr(output, "prompt_token_ids", None)
+            if prompt_token_ids is not None:
+                try:
+                    prompt_tokens = int(len(prompt_token_ids))
+                except TypeError:
+                    pass
+
+            completion_tokens = self._completion_token_length(output_item) if output_item is not None else 0
+            results.append(
+                InferenceResult(
+                    output_json=json.dumps(normalized, ensure_ascii=False),
+                    contains_pii=normalized.get("contains_pii"),
+                    cost_usd=0.0,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+            )
+        return results
+
+    def close(self) -> None:
+        for attr in ("_llm", "_tokenizer"):
+            if hasattr(self, attr):
+                obj = getattr(self, attr)
+                setattr(self, attr, None)
+                try:
+                    del obj
+                except Exception:
+                    pass
+        _release_cuda_memory()
+        return None
+
+
 def _resolve_hf_runtime_settings(
     settings: dict[str, Any],
     *,
@@ -925,6 +1335,9 @@ class BaseHuggingFaceRunner:
             "trust_remote_code": self._trust_remote_code,
             "torch_dtype": self._torch_dtype,
         }
+        attn_impl = self._settings.get("attn_implementation")
+        if attn_impl is not None and str(attn_impl).strip():
+            kwargs["attn_implementation"] = str(attn_impl).strip()
         if self._device_map is not None:
             kwargs["device_map"] = self._device_map
             max_memory = self._settings.get("max_memory")
@@ -1012,23 +1425,7 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
         return self._torch.device("cuda:0" if self._torch.cuda.is_available() else "cpu")
 
     def _build_prompt_text(self, messages: list[dict[str, str]]) -> str:
-        apply_template = getattr(self._tokenizer, "apply_chat_template", None)
-        if callable(apply_template):
-            try:
-                return self._tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    enable_thinking=False,
-                )
-            except TypeError:
-                return self._tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-
-        return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+        return _build_chat_prompt_text(self._tokenizer, messages)
 
     def _build_generation_kwargs(self) -> dict[str, Any]:
         do_sample_raw = self._settings.get("do_sample", False)
@@ -1054,42 +1451,59 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
             kwargs["temperature"] = float(temperature)
         return kwargs
 
-    def predict(self, content: str) -> InferenceResult:
-        prompts = get_task_definition(TASK_ID).prompt_builder.build(
-            model_id=self.model_id,
-            content=content,
-        )
-        messages = [
-            {"role": "system", "content": prompts["system"]},
-            {"role": "user", "content": prompts["user"]},
-        ]
-        prompt_text = self._build_prompt_text(messages)
-
+    def _tokenize_prompt_texts(
+        self,
+        prompt_texts: list[str],
+    ) -> tuple[dict[str, Any], list[int]]:
         max_input_tokens = self._settings.get("max_input_tokens")
-        token_kwargs: dict[str, Any] = {"return_tensors": "pt"}
+        token_kwargs: dict[str, Any] = {
+            "return_tensors": "pt",
+            "padding": True,
+        }
         if max_input_tokens is not None:
             token_kwargs["truncation"] = True
             token_kwargs["max_length"] = int(max_input_tokens)
 
-        model_inputs = self._tokenizer(prompt_text, **token_kwargs)
+        model_inputs = self._tokenizer(prompt_texts, **token_kwargs)
         if self._input_device is not None:
             model_inputs = {
                 k: (v.to(self._input_device) if hasattr(v, "to") else v)
                 for k, v in model_inputs.items()
             }
 
-        with self._torch.no_grad():
-            generated_ids = self._model.generate(
-                **model_inputs,
-                **self._build_generation_kwargs(),
-            )
+        input_lengths: list[int] = []
+        attention_mask = model_inputs.get("attention_mask")
+        if attention_mask is not None and hasattr(attention_mask, "sum"):
+            if hasattr(attention_mask, "dim") and attention_mask.dim() == 2:
+                input_lengths = [int(v) for v in attention_mask.sum(dim=1).tolist()]
+            else:
+                total_tensor = attention_mask.sum()
+                total = int(total_tensor.item()) if hasattr(total_tensor, "item") else int(total_tensor)
+                input_lengths = [total]
+        elif "input_ids" in model_inputs and hasattr(model_inputs["input_ids"], "shape"):
+            shape = model_inputs["input_ids"].shape
+            if len(shape) == 2:
+                input_lengths = [int(shape[-1])] * int(shape[0])
+            elif len(shape) == 1:
+                input_lengths = [int(shape[0])]
+        return model_inputs, input_lengths
 
-        input_len = int(model_inputs["input_ids"].shape[-1]) if "input_ids" in model_inputs else 0
-        output_row = generated_ids[0]
-        generated_part = output_row[input_len:] if input_len and len(output_row) >= input_len else output_row
+    def _build_inference_result_from_generated(
+        self,
+        output_row: Any,
+        *,
+        input_len: int,
+        max_input_len: int,
+    ) -> InferenceResult:
+        if max_input_len and len(output_row) >= max_input_len:
+            generated_part = output_row[max_input_len:]
+        elif input_len and len(output_row) >= input_len:
+            generated_part = output_row[input_len:]
+        else:
+            generated_part = output_row
+
         completion_tokens = int(generated_part.shape[0]) if hasattr(generated_part, "shape") else 0
         raw_text = self._tokenizer.decode(generated_part, skip_special_tokens=True).strip()
-
         normalized = normalize_pii_binary_json(raw_text)
         return InferenceResult(
             output_json=json.dumps(normalized, ensure_ascii=False),
@@ -1098,6 +1512,46 @@ class GraniteHuggingFaceRunner(BaseHuggingFaceRunner):
             prompt_tokens=input_len,
             completion_tokens=completion_tokens,
         )
+
+    def predict(self, content: str) -> InferenceResult:
+        return self.predict_batch([content])[0]
+
+    def predict_batch(self, contents: list[str]) -> list[InferenceResult]:
+        if not contents:
+            return []
+
+        prompt_texts: list[str] = []
+        for content in contents:
+            prompts = get_task_definition(TASK_ID).prompt_builder.build(
+                model_id=self.model_id,
+                content=content,
+            )
+            messages = [
+                {"role": "system", "content": prompts["system"]},
+                {"role": "user", "content": prompts["user"]},
+            ]
+            prompt_texts.append(self._build_prompt_text(messages))
+
+        model_inputs, input_lengths = self._tokenize_prompt_texts(prompt_texts)
+        with self._torch.no_grad():
+            generated_ids = self._model.generate(
+                **model_inputs,
+                **self._build_generation_kwargs(),
+            )
+
+        max_input_len = int(model_inputs["input_ids"].shape[-1]) if "input_ids" in model_inputs else 0
+        results: list[InferenceResult] = []
+        for idx in range(len(prompt_texts)):
+            output_row = generated_ids[idx]
+            input_len = input_lengths[idx] if idx < len(input_lengths) else max_input_len
+            results.append(
+                self._build_inference_result_from_generated(
+                    output_row,
+                    input_len=input_len,
+                    max_input_len=max_input_len,
+                )
+            )
+        return results
 
 
 class QwenGuardStreamRunner(BaseHuggingFaceRunner):
@@ -1166,6 +1620,15 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             return None
         return min(1.0, max(0.0, parsed))
 
+    @staticmethod
+    def _token_to_int(token: Any) -> int:
+        if isinstance(token, int):
+            return token
+        item_fn = getattr(token, "item", None)
+        if callable(item_fn):
+            return int(item_fn())
+        return int(token)
+
     def _stream_moderate_single_token(
         self,
         token_ids: Any,
@@ -1206,7 +1669,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
             stream_state = self._model.stream_generate(first_token)
             logits_tuple = next(stream_state)
         else:
-            next_token_id = int(token_0d.item()) if hasattr(token_0d, "item") else int(token_0d)
+            next_token_id = self._token_to_int(token_0d)
             logits_tuple = stream_state.send(next_token_id)
 
         try:
@@ -1262,8 +1725,14 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
 
         probs = self._torch.nn.functional.softmax(vector, dim=-1)
         pred_prob, pred_idx = self._torch.max(probs, dim=-1)
-        idx = int(pred_idx.item())
-        confidence = round(float(pred_prob.item()), 2)
+        idx_prob = self._torch.stack(
+            (
+                pred_idx.to(dtype=self._torch.float32),
+                pred_prob.to(dtype=self._torch.float32),
+            )
+        ).detach().cpu()
+        idx = int(idx_prob[0].item())
+        confidence = round(float(idx_prob[1].item()), 2)
 
         label = None
         if isinstance(label_map, dict):
@@ -1461,7 +1930,7 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                             stream_state=stream_state,
                         )
                     except Exception:
-                        token_scalar = int(token_0d.item()) if hasattr(token_0d, "item") else int(token_0d)
+                        token_scalar = self._token_to_int(token_0d)
                         result, stream_state = self._model.stream_moderate_from_ids(
                             token_scalar,
                             role="assistant",
@@ -1501,7 +1970,6 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                     stream_mode = "user_full_pass_stream_api"
                     processed_tokens = token_count
                     moderated_tokens = token_count
-                    detection_latency_ms = (time.perf_counter() - predict_started) * 1000
                     _append_qwen_debug(
                         {
                             "event": "official_user_full_pass_succeeded",
@@ -1636,6 +2104,9 @@ class QwenGuardStreamRunner(BaseHuggingFaceRunner):
                 except Exception:
                     pass
 
+        if not use_assistant_stream:
+            detection_latency_ms = None
+
         risk_level = self._last_item(result.get("risk_level"))
         risk_prob = self._last_float(result.get("risk_prob"))
         category = self._last_item(result.get("category"))
@@ -1749,6 +2220,14 @@ def _create_qwen_stream_runner(spec: ModelSpec) -> ModelRunner:
     return QwenGuardStreamRunner(spec)
 
 
+def _create_openai_compatible_runner(spec: ModelSpec) -> ModelRunner:
+    return OpenAICompatibleRunner(spec)
+
+
+def _create_vllm_offline_runner(spec: ModelSpec) -> ModelRunner:
+    return VLLMOfflineRunner(spec)
+
+
 def _create_huggingface_runner(spec: ModelSpec) -> ModelRunner:
     profile = (spec.profile or "granite_guard_json").strip().lower()
     if profile in {
@@ -1767,6 +2246,8 @@ def _create_huggingface_runner(spec: ModelSpec) -> ModelRunner:
 
 RUNNER_FACTORIES: dict[str, Callable[[ModelSpec], ModelRunner]] = {
     "openrouter": _create_openrouter_runner,
+    "openai_compatible": _create_openai_compatible_runner,
+    "vllm_offline": _create_vllm_offline_runner,
     "huggingface": _create_huggingface_runner,
     "qwen_stream": _create_qwen_stream_runner,
 }
@@ -1883,6 +2364,17 @@ def run_single_model(
     global TASK_ID
     TASK_ID = task_id
     runner = create_runner(spec)
+    vram_torch_module = _resolve_vram_torch_module(runner)
+    vram_samples_mb: list[float] = []
+    vram_device_count = 0
+
+    def capture_vram_sample() -> None:
+        nonlocal vram_device_count
+        used_mb, device_count = _sample_total_vram_usage_mb(vram_torch_module)
+        if device_count:
+            vram_device_count = max(vram_device_count, device_count)
+        if used_mb is not None:
+            vram_samples_mb.append(used_mb)
 
     outputs: list[str] = []
     predictions: list[bool | None] = []
@@ -1901,8 +2393,9 @@ def run_single_model(
     completion_tokens_total = 0
 
     started = time.perf_counter()
+    capture_vram_sample()
     try:
-        if spec.provider == "openrouter" and hasattr(runner, "predict_async"):
+        if callable(getattr(runner, "predict_async", None)):
             prepared_rows: list[tuple[int, str]] = []
             if content_column in df.columns:
                 raw_contents = df[content_column].tolist()
@@ -1937,6 +2430,7 @@ def run_single_model(
                 for local_idx, slot_idx in enumerate(valid_slots):
                     inference_results[slot_idx] = valid_inferences[local_idx]
                     row_latencies_ms[slot_idx] = valid_latencies[local_idx]
+                capture_vram_sample()
 
             for slot_idx in range(len(prepared_rows)):
                 inference = inference_results[slot_idx]
@@ -1956,44 +2450,127 @@ def run_single_model(
                 prompt_tokens_total += inference.prompt_tokens
                 completion_tokens_total += inference.completion_tokens
         else:
-            row_iterator = tqdm(
-                df.iterrows(),
-                total=len(df),
-                desc=f"{spec.key} rows",
-                unit="row",
-                disable=not show_progress,
-                leave=False,
-            )
-            for _, row in row_iterator:
-                content = row.get(content_column, "")
-                content = "" if pd.isna(content) else str(content).strip()
-
-                if not content:
-                    inference = _build_empty_content_inference()
-                    latencies_ms.append(0.0)
+            batch_predict = getattr(runner, "predict_batch", None)
+            if callable(batch_predict):
+                prepared_rows = []
+                if content_column in df.columns:
+                    raw_contents = df[content_column].tolist()
                 else:
-                    row_start = time.perf_counter()
-                    try:
-                        inference = runner.predict(content)
-                    except Exception as e:
-                        inference = _build_model_error_inference(e)
-                    latencies_ms.append((time.perf_counter() - row_start) * 1000)
+                    raw_contents = ["" for _ in range(len(df))]
+                for idx, raw_content in enumerate(raw_contents):
+                    content = "" if pd.isna(raw_content) else str(raw_content).strip()
+                    prepared_rows.append((idx, content))
 
-                costs_usd.append(inference.cost_usd)
-                outputs.append(inference.output_json)
-                predictions.append(inference.contains_pii)
-                detection_latencies_ms.append(inference.detection_latency_ms)
-                stream_modes.append(inference.stream_mode)
-                early_stopped_flags.append(inference.early_stopped)
-                fallback_used_flags.append(inference.fallback_used)
-                fallback_reasons.append(inference.fallback_reason)
-                processed_tokens_list.append(inference.processed_tokens)
-                total_tokens_list.append(inference.total_tokens)
-                setup_tokens_list.append(inference.setup_tokens)
-                moderated_tokens_list.append(inference.moderated_tokens)
-                prompt_tokens_total += inference.prompt_tokens
-                completion_tokens_total += inference.completion_tokens
+                inference_results = [_build_empty_content_inference() for _ in prepared_rows]
+                row_latencies_ms: list[float] = [0.0 for _ in prepared_rows]
+                valid_slots: list[int] = []
+                batch_size = 8
+                progress = tqdm(
+                    total=len(prepared_rows),
+                    desc=f"{spec.key} rows",
+                    unit="row",
+                    disable=not show_progress,
+                    leave=False,
+                )
+
+                try:
+                    for slot_idx, (_, content) in enumerate(prepared_rows):
+                        if content:
+                            valid_slots.append(slot_idx)
+                        else:
+                            progress.update(1)
+
+                    for start in range(0, len(valid_slots), batch_size):
+                        chunk_slots = valid_slots[start : start + batch_size]
+                        chunk_contents = [prepared_rows[slot_idx][1] for slot_idx in chunk_slots]
+                        batch_started = time.perf_counter()
+                        try:
+                            batch_inferences = batch_predict(chunk_contents)
+                            if len(batch_inferences) != len(chunk_slots):
+                                raise RuntimeError(
+                                    "predict_batch 回傳筆數與輸入不一致: "
+                                    f"{len(batch_inferences)} != {len(chunk_slots)}"
+                                )
+                            batch_latency_ms = (time.perf_counter() - batch_started) * 1000
+                            for local_idx, slot_idx in enumerate(chunk_slots):
+                                inference_results[slot_idx] = batch_inferences[local_idx]
+                                row_latencies_ms[slot_idx] = batch_latency_ms
+                            capture_vram_sample()
+                        except Exception:
+                            for slot_idx in chunk_slots:
+                                content = prepared_rows[slot_idx][1]
+                                row_started = time.perf_counter()
+                                try:
+                                    inference_results[slot_idx] = runner.predict(content)
+                                except Exception as e:
+                                    inference_results[slot_idx] = _build_model_error_inference(e)
+                                row_latencies_ms[slot_idx] = (time.perf_counter() - row_started) * 1000
+                                capture_vram_sample()
+                        progress.update(len(chunk_slots))
+                finally:
+                    try:
+                        progress.close()
+                    except Exception:
+                        pass
+
+                for slot_idx in range(len(prepared_rows)):
+                    inference = inference_results[slot_idx]
+                    latencies_ms.append(row_latencies_ms[slot_idx])
+                    costs_usd.append(inference.cost_usd)
+                    outputs.append(inference.output_json)
+                    predictions.append(inference.contains_pii)
+                    detection_latencies_ms.append(inference.detection_latency_ms)
+                    stream_modes.append(inference.stream_mode)
+                    early_stopped_flags.append(inference.early_stopped)
+                    fallback_used_flags.append(inference.fallback_used)
+                    fallback_reasons.append(inference.fallback_reason)
+                    processed_tokens_list.append(inference.processed_tokens)
+                    total_tokens_list.append(inference.total_tokens)
+                    setup_tokens_list.append(inference.setup_tokens)
+                    moderated_tokens_list.append(inference.moderated_tokens)
+                    prompt_tokens_total += inference.prompt_tokens
+                    completion_tokens_total += inference.completion_tokens
+            else:
+                row_iterator = tqdm(
+                    df.iterrows(),
+                    total=len(df),
+                    desc=f"{spec.key} rows",
+                    unit="row",
+                    disable=not show_progress,
+                    leave=False,
+                )
+                for _, row in row_iterator:
+                    content = row.get(content_column, "")
+                    content = "" if pd.isna(content) else str(content).strip()
+
+                    if not content:
+                        inference = _build_empty_content_inference()
+                        latencies_ms.append(0.0)
+                    else:
+                        row_start = time.perf_counter()
+                        try:
+                            inference = runner.predict(content)
+                        except Exception as e:
+                            inference = _build_model_error_inference(e)
+                        latencies_ms.append((time.perf_counter() - row_start) * 1000)
+                        capture_vram_sample()
+
+                    costs_usd.append(inference.cost_usd)
+                    outputs.append(inference.output_json)
+                    predictions.append(inference.contains_pii)
+                    detection_latencies_ms.append(inference.detection_latency_ms)
+                    stream_modes.append(inference.stream_mode)
+                    early_stopped_flags.append(inference.early_stopped)
+                    fallback_used_flags.append(inference.fallback_used)
+                    fallback_reasons.append(inference.fallback_reason)
+                    processed_tokens_list.append(inference.processed_tokens)
+                    total_tokens_list.append(inference.total_tokens)
+                    setup_tokens_list.append(inference.setup_tokens)
+                    moderated_tokens_list.append(inference.moderated_tokens)
+                    prompt_tokens_total += inference.prompt_tokens
+                    completion_tokens_total += inference.completion_tokens
     finally:
+        capture_vram_sample()
         runner.close()
         _release_cuda_memory()
 
@@ -2103,6 +2680,7 @@ def run_single_model(
         "stream_fallback_rate": round(stream_fallback_rate, 4),
         "stream_early_stop_count": early_stop_rows,
         "stream_early_stop_rate": round(stream_early_stop_rate, 4),
+        **_summarize_vram_usage_mb(vram_samples_mb, device_count=vram_device_count),
     }
 
     return result_df, meta
