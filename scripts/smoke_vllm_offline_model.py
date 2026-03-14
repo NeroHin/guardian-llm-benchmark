@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true")
     parser.add_argument("--no-trust-remote-code", dest="trust_remote_code", action="store_false")
-    parser.add_argument("--torch-dtype", default="bfloat16")
+    parser.add_argument("--torch-dtype", default="float16")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--max-model-len", type=int, default=131072)
     parser.add_argument("--max-tokens", type=int, default=48)

@@ -170,7 +170,7 @@ models:
     params_b: 4.0
     settings:
       trust_remote_code: true
-      torch_dtype: bfloat16
+      torch_dtype: float16
       gpu_memory_utilization: 0.9
       max_model_len: 131072
       max_tokens: 48

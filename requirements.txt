@@ -5,7 +5,8 @@ openai>=1.0.0
 python-dotenv>=1.0.0
 transformers>=4.56.1,<5.0.0
 huggingface_hub>=0.32.0
-torch==2.5.1
+torch==2.10.0 ; sys_platform == "linux"
+torch==2.5.1 ; sys_platform != "linux"
 # Linux GPU server only. Official vLLM docs recommend installing with:
 #   uv pip install -r requirements.txt --torch-backend=auto
 vllm>=0.17.1 ; sys_platform == "linux"
@@ -14,6 +15,6 @@ numpy>=2.2.6
 pyyaml>=6.0
 tqdm>=4.66.0
 
-# ABI-specific Granite 4 / SSM companion installs:
+# Legacy Granite HF / SSM installs. Use a separate env only:
 #   FALSE: pip install -r requirements-granite-ssm-cxx11abi-false.txt
 #   TRUE:  pip install -r requirements-granite-ssm-cxx11abi-true.txt

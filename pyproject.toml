@@ -16,7 +16,8 @@ dependencies = [
   "python-dotenv>=1.0.0",
   "transformers>=4.56.1,<5.0.0",
   "huggingface_hub>=0.32.0",
-  "torch==2.5.1",
+  "torch==2.10.0 ; sys_platform == 'linux'",
+  "torch==2.5.1 ; sys_platform != 'linux'",
   "vllm>=0.17.1 ; sys_platform == 'linux'",
   "accelerate>=1.12.0",
   "numpy>=2.2.6",
@@ -25,6 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Legacy Granite HF / SSM extras. Do not mix with the default Linux vLLM environment.
 granite-ssm-cu11-torch25-cxx11abi-false = [
   "mamba-ssm @ https://github.com/state-spaces/mamba/releases/download/v2.3.0/mamba_ssm-2.3.0+cu11torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
   "causal-conv1d @ https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.6.0/causal_conv1d-1.6.0+cu11torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",

@@ -1,6 +1,19 @@
+# Legacy Granite HF / SSM environment only.
+# Do not combine this file with the default vLLM environment.
+# Use a dedicated env when you explicitly need the old HF hybrid runner.
 --index-url https://download.pytorch.org/whl/cu118
 --extra-index-url https://pypi.org/simple
--r requirements.txt
+pandas
+ollama
+opencc
+openai>=1.0.0
+python-dotenv>=1.0.0
+transformers>=4.56.1,<5.0.0
+huggingface_hub>=0.32.0
+accelerate>=1.12.0
+numpy>=2.2.6
+pyyaml>=6.0
+tqdm>=4.66.0
 torch==2.5.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
 torchvision==0.20.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
 torchaudio==2.5.1 ; python_version == "3.12" and sys_platform == "linux" and platform_machine == "x86_64"
