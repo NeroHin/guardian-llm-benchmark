@@ -77,6 +77,19 @@ class _FakeLLM:
         return template_outputs[: len(prompts)]
 
 
+class _FakeTorchLowMem:
+    class cuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def mem_get_info() -> tuple[int, int]:
+            total = 100 * 1024**3
+            free = 60 * 1024**3
+            return free, total
+
+
 def test_vllm_offline_runner_predict_batch(monkeypatch) -> None:
     _FakeLLM.init_calls.clear()
     _FakeLLM.generate_calls.clear()
@@ -143,6 +156,48 @@ def test_vllm_offline_runner_predict_batch(monkeypatch) -> None:
     assert sampling_kwargs["top_p"] == 0.95
     assert isinstance(sampling_kwargs["structured_outputs"], _FakeStructuredOutputsParams)
     assert sampling_kwargs["structured_outputs"].kwargs["json"]["required"] == ["contains_pii"]
+
+
+def test_vllm_offline_runner_raises_with_clear_error_when_gpu_memory_insufficient(monkeypatch) -> None:
+    _FakeLLM.init_calls.clear()
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(AutoTokenizer=_FakeTokenizer),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm",
+        types.SimpleNamespace(
+            LLM=_FakeLLM,
+            SamplingParams=_FakeSamplingParams,
+            sampling_params=types.SimpleNamespace(
+                StructuredOutputsParams=_FakeStructuredOutputsParams,
+            ),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", _FakeTorchLowMem)
+
+    spec = runtime.ModelSpec(
+        key="local-vllm-offline-low-mem",
+        model_id="nvidia/Nemotron-H-4B-Instruct-128K",
+        provider="vllm_offline",
+        settings={
+            "gpu_memory_utilization": 0.75,
+            "torch_dtype": "auto",
+        },
+    )
+
+    try:
+        runtime.VLLMOfflineRunner(spec)
+        raise AssertionError("預期顯存不足時應拋出 RuntimeError")
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "GPU 可用記憶體不足" in message
+        assert "gpu_memory_utilization=0.75" in message
+        assert "降低 gpu_memory_utilization" in message
+
+    assert _FakeLLM.init_calls == []
 
 
 def test_vllm_offline_runner_predict_wraps_single_item(monkeypatch) -> None:

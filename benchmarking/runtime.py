@@ -332,6 +332,10 @@ def _coerce_bool(value: Any) -> bool | None:
     return None
 
 
+def _bytes_to_gib(value: int | float) -> float:
+    return round(float(value) / (1024**3), 2)
+
+
 def _configure_hf_xet_env(settings: dict[str, Any]) -> dict[str, str]:
     """
     依模型 settings.hf_xet 設定 Hugging Face Xet 下載加速環境變數。
@@ -1106,7 +1110,56 @@ class VLLMOfflineRunner:
             if value is not None:
                 llm_kwargs[key] = value
 
+        self._run_gpu_memory_preflight(llm_kwargs)
         self._llm = LLM(**llm_kwargs)
+
+    def _run_gpu_memory_preflight(self, llm_kwargs: dict[str, Any]) -> None:
+        skip_check = _coerce_bool(self._settings.get("skip_gpu_memory_preflight", False))
+        if skip_check:
+            return
+
+        try:
+            import torch
+        except Exception:
+            return
+
+        cuda = getattr(torch, "cuda", None)
+        if cuda is None:
+            return
+
+        is_available = getattr(cuda, "is_available", None)
+        if not callable(is_available) or not is_available():
+            return
+
+        mem_get_info = getattr(cuda, "mem_get_info", None)
+        if not callable(mem_get_info):
+            return
+
+        desired_ratio = llm_kwargs.get("gpu_memory_utilization", self._settings.get("gpu_memory_utilization", 0.9))
+        try:
+            desired_ratio = float(desired_ratio)
+        except (TypeError, ValueError):
+            return
+        if desired_ratio <= 0:
+            return
+
+        try:
+            free_bytes, total_bytes = mem_get_info()
+        except Exception:
+            return
+
+        desired_bytes = total_bytes * desired_ratio
+        if free_bytes >= desired_bytes:
+            return
+
+        raise RuntimeError(
+            "vLLM 啟動前 GPU 可用記憶體不足："
+            f"free={_bytes_to_gib(free_bytes)} GiB, "
+            f"total={_bytes_to_gib(total_bytes)} GiB, "
+            f"desired={_bytes_to_gib(desired_bytes)} GiB "
+            f"(gpu_memory_utilization={desired_ratio}). "
+            "請降低 gpu_memory_utilization、縮小 max_model_len，或先釋放其他 CUDA process。"
+        )
 
     def _build_prompt_text(self, messages: list[dict[str, str]]) -> str:
         return _build_chat_prompt_text(self._tokenizer, messages)

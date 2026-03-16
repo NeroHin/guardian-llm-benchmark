@@ -9,6 +9,8 @@ def test_pii_binary_prompt_builder_requires_single_json_object() -> None:
     prompts = task.prompt_builder.build("fake/model", "王小明身分證字號是A123456789")
 
     assert "只輸出一個可解析的 JSON 物件" in prompts["user"]
+    assert "只有文字中出現「明確、直接、可回溯到個人的識別子」時，才回傳 true" in prompts["user"]
+    assert "若不確定，但文字裡沒有明確識別子，回傳 false" in prompts["user"]
     assert '"contains_pii"' in prompts["user"]
     assert '"label"' not in prompts["user"]
 
@@ -23,6 +25,8 @@ def test_pii_binary_prompt_builder_uses_nemotron_specific_non_tool_prompt() -> N
 
     assert "No tools are available." in prompts["system"]
     assert "Never emit <TOOLCALL>" in prompts["user"]
+    assert "One explicit identifier anywhere in a long text is sufficient for true." in prompts["user"]
+    assert "If uncertain and there is no explicit identifier, return false." in prompts["user"]
     assert '{"contains_pii": true}' in prompts["user"]
     assert '{"contains_pii": false}' in prompts["user"]
     assert "只輸出一個可解析的 JSON 物件" not in prompts["user"]

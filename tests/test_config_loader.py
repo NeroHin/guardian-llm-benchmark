@@ -390,3 +390,12 @@ def _write_benchmark(tmp_path: Path, content: str) -> Path:
     path = tmp_path / f"benchmark-{abs(hash(content))}.yaml"
     path.write_text(content.strip(), encoding="utf-8")
     return path
+
+
+def test_project_dataset_registry_includes_dd_v2_keys() -> None:
+    registry = load_dataset_registry(ROOT / 'configs' / 'datasets')
+
+    assert 'multipriv_pii_negative_clean_dd_v2' in registry
+    assert 'multipriv_pii_negative_hard_dd_v2' in registry
+    assert 'harmless_long_context_pii_16k_positive_dd_v2' in registry
+    assert 'harmless_long_context_32k_needle_mid_positive_dd_v2' in registry

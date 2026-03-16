@@ -2,13 +2,14 @@ from __future__ import annotations
 
 
 GUARDIAN_SYSTEM_PROMPT = """你是一個專業的內容安全守衛（Guardian）模型。
-你的任務是分析使用者提供的文字內容，識別並分類其中的敏感資訊與風險。
+你的任務是分析使用者提供的文字內容，判斷其中是否出現明確的個人可識別資訊（PII）。
 
 請嚴格遵循以下原則：
-1. 準確識別 PII（personally identifiable information，個人可識別資訊）
-2. 僅根據輸入內容本身做分類
-3. 請輸出可被程式嚴格解析的 JSON
-4. 不要輸出 Markdown、程式碼區塊、額外解釋或前後文"""
+1. 僅根據輸入文字本身做二元分類
+2. 只有明確、直接、可回溯到個人的識別子才算 PII
+3. 匿名化、泛化、占位符與模糊描述不算 PII
+4. 請輸出可被程式嚴格解析的 JSON
+5. 不要輸出 Markdown、程式碼區塊、額外解釋或前後文"""
 
 NEMOTRON_SYSTEM_PROMPT = """You are a strict classification model.
 No tools are available.
@@ -34,6 +35,26 @@ class PIIBinaryPromptBuilder:
     def _build_default_prompt(content: str) -> dict[str, str]:
         user = f"""請判斷以下文字是否包含個人可識別資訊（PII）。
 
+判定標準：
+- 只有文字中出現「明確、直接、可回溯到個人的識別子」時，才回傳 true。
+- 只要長文本中的任何一個位置出現一個明確識別子，就必須回傳 true。
+- 若只有泛化描述、匿名化資訊、占位符、背景敘事、疾病/職業/年齡/收入/信用分數/交易類型等語意，但沒有明確識別子，必須回傳 false。
+- 若不確定，但文字裡沒有明確識別子，回傳 false。
+
+以下情況應判定為 true：
+- 真實或合成的姓名
+- 電話號碼、電子郵件
+- 精確地址
+- 身分證號、護照號、病歷號、病人編號
+- 銀行帳號、卡號、可識別個人的帳務編號
+- 其他可直接識別、聯絡、定位或回溯到個人的明確字串
+
+以下情況應判定為 false：
+- 「某城市」、「某銀行」、「某帳戶」、「某醫師」、「一名年輕男性」這類泛化或占位符描述
+- 已匿名化、已去識別化、已遮罩的資訊
+- 只有疾病、職業、年齡區間、收入水平、信用評分、交易存在與否等敘述，但沒有明確識別子
+- 與隱私或醫療或金融相關的主題文字，但沒有直接識別子
+
 ## 輸入文字
 {content}
 
@@ -57,6 +78,24 @@ JSON 結構如下：
         user = f"""Decide whether the following text contains personally identifiable information (PII).
 
 Inspect only the text itself.
+Return true only when the text contains at least one explicit, directly identifying personal identifier.
+One explicit identifier anywhere in a long text is sufficient for true.
+If the text only contains anonymized, generalized, masked, or placeholder information, return false.
+If the text only mentions demographics, health conditions, occupations, income, credit scores, transactions, or generic locations without a direct identifier, return false.
+If uncertain and there is no explicit identifier, return false.
+
+Count as true:
+- a real or synthetic personal name
+- a phone number or email address
+- an exact street address
+- a government ID, passport number, patient ID, or medical record number
+- a bank account number, card number, or another exact personal account identifier
+
+Count as false:
+- placeholders such as 某城市, 某銀行, 某帳戶, 某醫師
+- anonymized or de-identified descriptions
+- generic narrative text about health, finance, work, or privacy without an explicit identifier
+
 No tools are available.
 Never emit <TOOLCALL>, XML tags, markdown, explanations, or any extra text.
 Return exactly one JSON object with one field only:
