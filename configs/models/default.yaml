@@ -115,7 +115,7 @@ models:
     settings:
       trust_remote_code: true
       torch_dtype: auto
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_tokens: 48
       temperature: 0
       top_p: 1.0
@@ -129,7 +129,7 @@ models:
     settings:
       trust_remote_code: true
       torch_dtype: auto
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_tokens: 48
       temperature: 0
       top_p: 1.0
@@ -143,7 +143,7 @@ models:
     settings:
       trust_remote_code: false
       torch_dtype: auto
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.75
       max_tokens: 48
       temperature: 0
       top_p: 1.0
@@ -157,7 +157,7 @@ models:
     settings:
       trust_remote_code: false
       torch_dtype: auto
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_tokens: 48
       temperature: 0
       top_p: 1.0
@@ -201,7 +201,7 @@ models:
     settings:
       trust_remote_code: true
       torch_dtype: auto
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_model_len: 131072
       max_tokens: 48
       temperature: 0
